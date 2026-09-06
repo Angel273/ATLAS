@@ -158,3 +158,35 @@ td.number { font-family: ui-monospace, monospace; }
 @media (max-width: 950px) { .app-grid { grid-template-columns: 1fr; } .sidebar { display: none; } .sidebar.is-open { display: flex; position: fixed; left: 0; width: 256px; background: var(--canvas); z-index: 19; box-shadow: 8px 0 24px rgb(29 29 27 / .12); } .mobile-menu { display: inline-flex; margin-left: 14px; } .brand { width: auto; padding: 0 20px; } .header-context { margin-left: 8px; padding-left: 20px; } .header-actions .status { display: none; } .title-row { align-items: flex-start; } .module-list { grid-template-columns: 1fr; } }
 @media (max-width: 640px) { .header { height: 65px; } .header-context { display: none; } .header-actions { padding: 0 15px; gap: 9px; } .brand-word { font-size: 26px; } .brand-symbol { width: 24px; } .brand { padding: 0 12px; } .workspace { padding: 22px 17px; } .breadcrumb { margin-bottom: 16px; } .title-row { display: block; } .title-row .actions { margin-top: 18px; } h1 { font-size: 36px; } .kpi-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } .kpi-heading span { font-size: 11px; } .kpi-value { font-size: 40px; } .chart-grid { grid-template-columns: 1fr; } .toolbar { gap: 10px; } .filter { display: grid; gap: 4px; } .filter select { max-width: 155px; } .page-footer { align-items: flex-start; flex-direction: column; gap: 6px; } .sidebar.is-open { top: 65px; height: calc(100vh - 65px); } .auth-card { padding: 25px; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; } }
+
+/* Semantic Canvas Styles */
+@keyframes dashdraw {
+  from {
+    stroke-dashoffset: 24;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.react-flow__handle {
+  transition: transform 0.15s, background-color 0.15s;
+}
+
+.react-flow__handle:hover {
+  transform: scale(1.3);
+}
+
+.react-flow__controls-button {
+  background: var(--surface) !important;
+  border-bottom: 1px solid var(--border) !important;
+  fill: var(--ink) !important;
+}
+
+.react-flow__controls-button:hover {
+  background: var(--surface-muted) !important;
+}
+
+.react-flow__minimap {
+  box-shadow: 0 4px 14px rgba(29, 29, 27, 0.08) !important;
+}

@@ -17,11 +17,13 @@ import {
   type SemanticRelationship,
 } from '@atlas/contracts';
 import { api } from '../../../lib/api';
-import { Brand } from '../../../components/workspace';
 import { AppHeader } from '../../../components/app-header';
+import { SemanticCanvas } from '../../../components/semantic-canvas/semantic-canvas';
+import { Network, Table } from 'lucide-react';
 
 export default function KpisPage() {
   const [session, setSession] = useState<Session | null>(null);
+  const [viewMode, setViewMode] = useState<'canvas' | 'table'>('canvas');
   const [kpis, setKpis] = useState<Kpi[]>([]);
   const [sources, setSources] = useState<{ id: string; name: string; slug: string; version: DatasetVersion }[]>([]);
   const [sourceId, setSourceId] = useState('');
@@ -261,6 +263,47 @@ export default function KpisPage() {
     });
   }
 
+  async function handleCanvasSaveRelationship(payload: {
+    fromDatasetId: string;
+    fromField: string;
+    toDatasetId: string;
+    toField: string;
+    cardinality: 'one_to_one' | 'one_to_many' | 'many_to_one';
+    joinType: 'left' | 'inner';
+    isPreferred: boolean;
+  }) {
+    await api('/semantic/relationships', semanticRelationshipSchema, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify(payload),
+    });
+    setNotice('Relación semántica publicada y disponible para el compilador de JOINs.');
+    await refresh();
+  }
+
+  async function handleCanvasSaveKpi(payload: {
+    name: string;
+    slug: string;
+    description: string;
+    datasetVersionId: string;
+    relatedDatasetVersionIds: string[];
+    formula: string;
+    unit: 'number' | 'percent' | 'seconds';
+    precision: number;
+    dimensions: string[];
+    targetDirection: 'higher_is_better' | 'lower_is_better' | 'target_match';
+    targets: { target?: number | undefined; warningThreshold?: number | undefined; criticalThreshold?: number | undefined };
+    dependencies: string[];
+  }) {
+    await api('/kpis', kpiSchema, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify(payload),
+    });
+    setNotice(`KPI '${payload.name}' publicado exitosamente.`);
+    await refresh();
+  }
+
   const fromSourceItem = sources.find(s => s.id === relFromDs);
   const toSourceItem = sources.find(s => s.id === relToDs);
 
@@ -281,11 +324,45 @@ export default function KpisPage() {
             <h1>Motor de KPI y Relaciones</h1>
             <p>Define uniones entre datasets, gobierna KPIs multi-tabla y evalúa metas operacionales.</p>
           </div>
+          <div className="actions" style={{ display: 'flex', gap: 6, background: 'var(--surface-muted)', padding: 4, borderRadius: 6, border: '1px solid var(--border)' }}>
+            <button
+              type="button"
+              onClick={() => setViewMode('canvas')}
+              className={`button ${viewMode === 'canvas' ? 'primary' : ''}`}
+              style={{ height: 32, fontSize: 12, padding: '0 12px', gap: 6 }}
+            >
+              <Network size={14} />
+              <span>Canvas ERD & Semántica</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('table')}
+              className={`button ${viewMode === 'table' ? 'primary' : ''}`}
+              style={{ height: 32, fontSize: 12, padding: '0 12px', gap: 6 }}
+            >
+              <Table size={14} />
+              <span>Lista & Formularios</span>
+            </button>
+          </div>
         </div>
 
         {error && <p role="alert" className="form-error">{error}</p>}
         {notice && <p role="status">{notice}</p>}
 
+        {viewMode === 'canvas' ? (
+          <div style={{ marginTop: 16 }}>
+            <SemanticCanvas
+              sources={sources}
+              relationships={relationships}
+              kpis={kpis}
+              canManage={manage ?? false}
+              onSaveRelationship={handleCanvasSaveRelationship}
+              onSaveKpi={handleCanvasSaveKpi}
+              onRefresh={refresh}
+            />
+          </div>
+        ) : (
+          <>
         {/* SECTION 1: Semantic Relationships (Phase 2 Multi-table) */}
         {manage && (
           <section className="panel data-card">
@@ -1081,6 +1158,8 @@ export default function KpisPage() {
               </div>
             )}
           </section>
+        )}
+          </>
         )}
       </main>
     </>
