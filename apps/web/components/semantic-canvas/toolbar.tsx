@@ -10,6 +10,7 @@ import {
   Plus,
   Play,
   LayoutGrid,
+  Eye,
 } from 'lucide-react';
 import type { CanvasLayer } from './types';
 
@@ -26,6 +27,8 @@ interface CanvasToolbarProps {
   totalDatasets: number;
   totalKpis: number;
   totalRelationships: number;
+  edgesOnTop?: boolean;
+  onToggleEdgesOnTop?: () => void;
 }
 
 export function CanvasToolbar({
@@ -41,6 +44,8 @@ export function CanvasToolbar({
   totalDatasets,
   totalKpis,
   totalRelationships,
+  edgesOnTop = true,
+  onToggleEdgesOnTop,
 }: CanvasToolbarProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -172,6 +177,29 @@ export function CanvasToolbar({
           title="Centrar y encajar vista"
         >
           <Maximize2 size={12} /> Centrar
+        </button>
+
+        <div style={{ width: 1, height: 20, background: 'var(--border)', margin: '0 4px' }} />
+
+        {/* Toggle Edges on Top */}
+        <button
+          type="button"
+          onClick={onToggleEdgesOnTop}
+          className="button"
+          style={{
+            height: 28,
+            padding: '0 8px',
+            fontSize: 11,
+            gap: 4,
+            background: edgesOnTop ? 'var(--surface-muted)' : 'var(--surface)',
+            color: edgesOnTop ? 'var(--ink)' : 'var(--secondary)',
+            borderColor: edgesOnTop ? 'var(--accent)' : 'var(--border)',
+            fontWeight: edgesOnTop ? 600 : 400,
+          }}
+          title="Alternar: líneas al frente (sobre las tarjetas) o al fondo (detrás de las tarjetas)"
+        >
+          <Eye size={12} style={{ color: edgesOnTop ? 'var(--accent)' : 'var(--muted)' }} />
+          <span>Líneas al frente: {edgesOnTop ? 'ON' : 'OFF'}</span>
         </button>
       </div>
 

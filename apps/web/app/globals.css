@@ -190,3 +190,12 @@ td.number { font-family: ui-monospace, monospace; }
 .react-flow__minimap {
   box-shadow: 0 4px 14px rgba(29, 29, 27, 0.08) !important;
 }
+
+/* Edge Layering: Display lines in front of cards with halo contrast */
+.edges-on-top .react-flow__edges {
+  z-index: 10 !important;
+}
+
+.edges-on-top .react-flow__edge-labels {
+  z-index: 11 !important;
+}

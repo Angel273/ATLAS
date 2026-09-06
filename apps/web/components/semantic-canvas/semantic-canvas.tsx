@@ -93,6 +93,7 @@ function InnerSemanticCanvas({
   const { fitView } = useReactFlow();
 
   const [layer, setLayer] = useState<CanvasLayer>('all');
+  const [edgesOnTop, setEdgesOnTop] = useState(true);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
 
@@ -238,6 +239,7 @@ function InnerSemanticCanvas({
         sourceHandle: `field-right-${rel.fromField}`,
         targetHandle: `field-left-${rel.toField}`,
         type: 'semanticEdge',
+        zIndex: edgesOnTop ? 10 : 0,
         markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: isHigh ? '#D9531E' : 'var(--accent)' },
         data: {
           relationshipId: rel.id,
@@ -264,16 +266,17 @@ function InnerSemanticCanvas({
     const dependencyEdges: Edge[] = [];
 
     kpis.forEach(kpi => {
-      // Edge from base dataset to KPI
+      // Edge from base dataset to KPI (Clean left-to-right connection via dataset-right to kpi-target)
       const parentSource = sources.find(s => s.version.id === kpi.datasetVersionId);
       if (parentSource) {
         dependencyEdges.push({
           id: `dep-ds-${parentSource.id}-kpi-${kpi.id}`,
           source: `dataset-${parentSource.id}`,
           target: `kpi-${kpi.id}`,
-          sourceHandle: 'dataset-bottom',
-          targetHandle: 'kpi-target-top',
+          sourceHandle: 'dataset-right',
+          targetHandle: 'kpi-target',
           type: 'dependencyEdge',
+          zIndex: edgesOnTop ? 10 : 0,
           markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: '#2F6FED' },
           data: {
             fromSlug: parentSource.slug,
@@ -293,6 +296,7 @@ function InnerSemanticCanvas({
             sourceHandle: 'kpi-source',
             targetHandle: 'kpi-target',
             type: 'dependencyEdge',
+            zIndex: edgesOnTop ? 10 : 0,
             markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: '#2F6FED' },
             data: {
               fromSlug: parentKpi.slug,
@@ -307,7 +311,7 @@ function InnerSemanticCanvas({
     const allEdges = [...semanticEdges, ...dependencyEdges];
 
     return { allNodes, allEdges };
-  }, [sources, relationships, kpis, simulatedPath]);
+  }, [sources, relationships, kpis, simulatedPath, edgesOnTop]);
 
   // Sync state initially or on update
   useEffect(() => {
@@ -524,7 +528,10 @@ function InnerSemanticCanvas({
   }, [setNodes, setEdges, fitView, showToast]);
 
   return (
-    <div style={{ position: 'relative', width: '100%', height: 'calc(100vh - 150px)', minHeight: 600, background: 'var(--canvas)', borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border)' }}>
+    <div
+      className={edgesOnTop ? 'edges-on-top' : ''}
+      style={{ position: 'relative', width: '100%', height: 'calc(100vh - 150px)', minHeight: 600, background: 'var(--canvas)', borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border)' }}
+    >
       {/* Toast Alert */}
       {toastMessage && (
         <div
@@ -568,6 +575,8 @@ function InnerSemanticCanvas({
         totalDatasets={sources.length}
         totalKpis={kpis.length}
         totalRelationships={relationships.length}
+        edgesOnTop={edgesOnTop}
+        onToggleEdgesOnTop={() => setEdgesOnTop(prev => !prev)}
       />
 
       {/* Main React Flow Canvas */}

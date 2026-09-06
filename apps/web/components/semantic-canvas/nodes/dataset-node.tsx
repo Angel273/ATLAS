@@ -95,6 +95,23 @@ export const DatasetNode = memo(function DatasetNode({ data, selected }: NodePro
         }}
       />
 
+      {/* Right Handle for clean dataset-to-KPI connections without looping under cards */}
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="dataset-right"
+        style={{
+          background: '#2F6FED',
+          width: 10,
+          height: 10,
+          border: '2px solid var(--surface)',
+          top: 24,
+          right: -5,
+          zIndex: 10,
+        }}
+        title="Conectar métricas KPI a este dataset"
+      />
+
       {/* Header */}
       <div
         style={{

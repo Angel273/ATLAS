@@ -57,6 +57,16 @@ export const SemanticEdge = memo(function SemanticEdge({
 
   return (
     <>
+      {/* Background halo outline for clean contrast over cards */}
+      <BaseEdge
+        id={`${id}-halo`}
+        path={edgePath}
+        style={{
+          stroke: 'var(--surface)',
+          strokeWidth: 5,
+          strokeOpacity: 0.95,
+        }}
+      />
       <BaseEdge
         id={id}
         path={edgePath}

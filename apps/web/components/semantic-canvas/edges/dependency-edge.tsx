@@ -32,17 +32,29 @@ export const DependencyEdge = memo(function DependencyEdge({
   });
 
   return (
-    <BaseEdge
-      id={id}
-      path={edgePath}
-      {...(markerEnd ? { markerEnd } : {})}
-      style={{
-        ...style,
-        stroke: isHighlighted ? '#D9531E' : '#2F6FED',
-        strokeWidth: isHighlighted ? 3 : 1.75,
-        strokeDasharray: '4,4',
-        animation: 'dashdraw 0.5s linear infinite',
-      }}
-    />
+    <>
+      {/* Background halo outline for clean contrast and visibility over cards or canvas */}
+      <BaseEdge
+        id={`${id}-halo`}
+        path={edgePath}
+        style={{
+          stroke: 'var(--surface)',
+          strokeWidth: 5,
+          strokeOpacity: 0.95,
+        }}
+      />
+      <BaseEdge
+        id={id}
+        path={edgePath}
+        {...(markerEnd ? { markerEnd } : {})}
+        style={{
+          ...style,
+          stroke: isHighlighted ? '#D9531E' : '#2F6FED',
+          strokeWidth: isHighlighted ? 3 : 2,
+          strokeDasharray: '5,5',
+          animation: 'dashdraw 0.5s linear infinite',
+        }}
+      />
+    </>
   );
 });
