@@ -1,0 +1,31 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Organization {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @db.VarChar(120)
+  timezone  String   @default("America/Guatemala") @db.VarChar(80)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  accounts  Account[]
+  @@map("organizations")
+}
+
+model Account {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  name      String   @db.VarChar(120)
+  timezone  String   @default("America/Guatemala") @db.VarChar(80)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  tenant    Organization @relation(fields: [tenantId], references: [id])
+  creationKey String @default(uuid()) @map("creation_key") @db.Uuid
+  @@unique([tenantId, id])
+  @@unique([tenantId, name])
+  @@unique([tenantId, creationKey])
+  @@map("accounts")
+}

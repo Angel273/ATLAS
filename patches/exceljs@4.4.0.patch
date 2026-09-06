@@ -1,0 +1,48 @@
+diff --git a/lib/stream/xlsx/workbook-reader.js b/lib/stream/xlsx/workbook-reader.js
+index 0d3afd62a54ebc566ac430a0741c9d51f8b12888..90c358f8fbc2584b3331220dd940494eb5ebf477 100644
+--- a/lib/stream/xlsx/workbook-reader.js
++++ b/lib/stream/xlsx/workbook-reader.js
+@@ -107,7 +107,8 @@ class WorkbookReader extends EventEmitter {
+           if (entry.path.match(/xl\/worksheets\/sheet\d+[.]xml/)) {
+             match = entry.path.match(/xl\/worksheets\/sheet(\d+)[.]xml/);
+             sheetNo = match[1];
+-            if (this.sharedStrings && this.workbookRels) {
++            // ATLAS: ZIP entry order is arbitrary; defer sheets until all metadata is parsed.
++            if (this.options.atlasReadSheetsImmediately === true) {
+               yield* this._parseWorksheet(iterateStream(entry), sheetNo);
+             } else {
+               // create temp file for each worksheet
+@@ -162,12 +163,27 @@ class WorkbookReader extends EventEmitter {
+ 
+   async _parseWorkbook(entry) {
+     this._emitEntry({type: 'workbook'});
+-
+-    const workbook = new WorkbookXform();
+-    await workbook.parseStream(iterateStream(entry));
+-
+-    this.properties = workbook.map.workbookPr;
+-    this.model = workbook.model;
++    // WorkbookXform currently fails to finalize on recent Node/saxes combinations.
++    // Only sheet identity is required by the streaming reader, so parse that
++    // metadata directly while retaining the worksheet streaming path.
++    const {SaxesParser} = require('saxes');
++    const {bufferToString} = require('../../utils/browser-buffer-decode');
++    const sheets = [];
++    const parser = new SaxesParser();
++    parser.on('opentag', node => {
++      if (node.name !== 'sheet') return;
++      const attributes = node.attributes;
++      sheets.push({
++        id: Number(attributes.sheetId && attributes.sheetId.value),
++        name: attributes.name && attributes.name.value,
++        state: (attributes.state && attributes.state.value) || 'visible',
++        rId: attributes['r:id'] && attributes['r:id'].value,
++      });
++    });
++    for await (const chunk of iterateStream(entry)) parser.write(bufferToString(chunk));
++    parser.close();
++    this.properties = {};
++    this.model = {sheets};
+   }
+ 
+   async *_parseSharedStrings(entry) {

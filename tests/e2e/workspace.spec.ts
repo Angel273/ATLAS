@@ -1,0 +1,107 @@
+import { expect, test } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
+import { createHmac } from 'node:crypto';
+
+test('filters synthetic data, exports CSV and offers chart data', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'Resumen operacional' })).toBeVisible();
+  await page.getByLabel('Cuenta', { exact: true }).selectOption('sales');
+  await expect(page.getByRole('cell', { name: 'Equipo Norte', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('cell', { name: 'Equipo Sur', exact: true })).toBeVisible();
+  await page.getByLabel('Equipo', { exact: true }).selectOption('sur');
+  await expect(page.getByRole('cell', { name: 'Equipo Oeste', exact: true })).toHaveCount(0);
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Exportar ejemplo' }).click();
+  expect((await download).suggestedFilename()).toBe('atlas-ejemplo-sintetico-2026-08.csv');
+  await page.getByRole('button', { name: 'Ver tabla de datos' }).click();
+  await expect(page.getByRole('table', { name: 'Tendencia ilustrativa del nivel de servicio' })).toBeVisible();
+});
+
+test('keyboard access and KPI provenance dialog', async ({ page }) => {
+  await page.goto('/'); await page.keyboard.press('Tab');
+  await expect(page.getByRole('link', { name: 'Saltar al contenido' })).toBeFocused();
+  await page.keyboard.press('Enter');
+  const definition = page.getByRole('button', { name: 'Ver definición: Nivel de servicio' });
+  await definition.focus(); await page.keyboard.press('Enter');
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(page.getByText('Fixture sintético local · ejemplo v1')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+});
+
+test('dashboard, login and mobile navigation meet automated accessibility checks', async ({ page }) => {
+  await page.goto('/');
+  expect((await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']).analyze()).violations).toEqual([]);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('button', { name: 'Abrir navegación' }).click();
+  await page.getByRole('button', { name: 'AI Chat', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'El análisis comienza con tus datos' })).toBeVisible();
+  await page.goto('/login');
+  expect((await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']).analyze()).violations).toEqual([]);
+});
+
+test('administrator enrolls MFA, enters actual organization and logs out', async ({ page }) => {
+  test.setTimeout(120000);
+  await page.goto('/login');
+  await page.getByLabel('Correo electrónico').fill('e2e-admin@example.invalid');
+  await page.getByLabel('Contraseña', { exact: true }).fill('Synthetic-E2E-password-ONLY-123!');
+  await page.getByRole('button', { name: 'Continuar', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Protege tu acceso' })).toBeVisible();
+  // RFC 6238 code from the actual enrollment secret; never persisted in traces.
+  const secret = await page.getByLabel('Clave de configuración MFA').textContent();
+  if (!secret) throw new Error('Missing test enrollment secret');
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const bits = [...secret].map(char => alphabet.indexOf(char).toString(2).padStart(5, '0')).join('');
+  const bytes = Buffer.from((bits.match(/.{8}/g) ?? []).map(byte => Number.parseInt(byte, 2)));
+  const counter = Buffer.alloc(8); counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30000)));
+  const hash = createHmac('sha1', bytes).update(counter).digest();
+  const offset = (hash[19] ?? 0) & 15;
+  const code = ((hash.readUInt32BE(offset) & 0x7fffffff) % 1000000).toString().padStart(6, '0');
+  await page.getByLabel('Código de autenticación').fill(code);
+  await page.getByRole('button', { name: 'Verificar y entrar' }).click();
+  await expect(page).toHaveURL('/app');
+  await expect(page.getByRole('heading', { name: 'Organización E2E sintética' })).toBeVisible();
+  await expect(page.getByText('Administrador · MFA verificado')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Usuarios y permisos' })).toBeVisible();
+  expect((await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']).analyze()).violations).toEqual([]);
+  await page.getByRole('button', { name: 'Crear cuenta' }).click();
+  const accountName = `Cuenta de prueba ${Date.now()}`;
+  await page.getByLabel('Nombre de la cuenta').fill(accountName);
+  await page.getByRole('button', { name: 'Guardar cuenta' }).click();
+  await expect(page.getByRole('cell', { name: accountName, exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('cell', { name: accountName, exact: true })).toBeVisible();
+  await page.getByRole('link',{name:'Abrir datasets'}).click();
+  await page.locator('summary').filter({hasText:'Crear dataset'}).click();
+  const slug=`calls_${Date.now()}`;
+  await page.getByLabel('Nombre',{exact:true}).fill('Llamadas E2E');
+  await page.getByLabel('Identificador',{exact:true}).fill(slug);
+  await page.getByRole('button',{name:'Crear dataset',exact:true}).click();
+  await page.getByLabel('Separador decimal').selectOption(',');
+  await page.getByLabel('Separador de miles').selectOption('.');
+  await page.getByLabel('Separador CSV').selectOption(';');
+  await page.getByLabel('Archivo',{exact:true}).setInputFiles({name:'regional.csv',mimeType:'text/csv',buffer:Buffer.from('id;importe;fecha;equipo\na;1.234,56;03/04/2026;A\nb;2,44;04/04/2026;B\n')});
+  await page.getByRole('button',{name:'Cargar y analizar'}).click();
+  await expect(page.getByLabel('Hoja a importar')).toBeVisible({timeout:30000});
+  await page.getByLabel('Hoja a importar').selectOption('CSV');
+  await page.getByLabel('Clave id',{exact:true}).check();
+  await page.getByRole('button',{name:'Validar datos',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Publicar versión',exact:true})).toBeVisible({timeout:30000});
+  await page.getByRole('button',{name:'Publicar versión',exact:true}).click();
+  await expect(page.getByText('Versión publicada. Ya puedes definir un KPI.')).toBeVisible();
+  expect((await new AxeBuilder({page}).withTags(['wcag2a','wcag2aa','wcag21aa','wcag22aa']).analyze()).violations).toEqual([]);
+  await page.getByRole('link',{name:'KPIs',exact:true}).click();
+  await page.getByLabel('Nombre',{exact:true}).fill('Importe E2E');
+  await page.getByLabel('Identificador del KPI').fill(`total_${Date.now()}`);
+  await page.getByLabel('Versión de datos').selectOption({label:'Llamadas E2E · v1'});
+  await page.getByLabel('Fórmula',{exact:true}).fill('SUM(importe)');
+  await page.getByRole('button',{name:'Validar y guardar KPI'}).click();
+  await page.getByRole('button',{name:'Calcular KPI',exact:true}).click();
+  await expect(page.getByRole('cell',{name:'1237.00',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Publicar KPI',exact:true}).click();
+  await expect(page.getByText('KPI publicado. La definición queda conservada.')).toBeVisible();
+  expect((await new AxeBuilder({page}).withTags(['wcag2a','wcag2aa','wcag21aa','wcag22aa']).analyze()).violations).toEqual([]);
+  await page.getByRole('link',{name:'Organización',exact:true}).click();
+  await page.getByRole('button', { name: 'Salir', exact: true }).click();
+  await expect(page).toHaveURL('/login');
+});

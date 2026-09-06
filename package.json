@@ -1,0 +1,33 @@
+{
+  "name": "atlas",
+  "private": true,
+  "packageManager": "pnpm@11.19.0",
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:e2e": "playwright test",
+    "db:generate": "pnpm --filter @atlas/database generate",
+    "db:migrate": "pnpm --filter @atlas/database migrate",
+    "db:test:prepare": "pnpm --filter @atlas/database test:prepare",
+    "infra:up": "docker compose up -d --wait",
+    "infra:stop": "docker compose stop"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "@playwright/test": "^1.58.2",
+    "@axe-core/playwright": "^4.11.0",
+    "@types/node": "^22.19.0",
+    "eslint": "^9.39.0",
+    "globals": "^16.5.0",
+    "tsx": "^4.21.0",
+    "turbo": "^2.8.0",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.56.0",
+    "vitest": "^3.2.4"
+  }
+}

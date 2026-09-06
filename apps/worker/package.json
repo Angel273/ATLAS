@@ -1,0 +1,5 @@
+{
+  "name": "@atlas/worker", "version": "0.1.0", "private": true, "type": "module",
+  "scripts": { "dev": "tsx watch src/main.ts", "build": "tsc -p tsconfig.json", "start": "tsx dist/main.js", "typecheck": "tsc -p tsconfig.json --noEmit" },
+  "dependencies": { "@atlas/ingestion": "workspace:*", "@atlas/contracts": "workspace:*", "@nestjs/common": "11.2.3", "@nestjs/core": "11.2.3", "bullmq": "^5.70.4", "reflect-metadata": "^0.2.2", "rxjs": "^7.8.2", "dotenv": "^17.3.1" }
+}
