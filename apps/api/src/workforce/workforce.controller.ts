@@ -210,4 +210,39 @@ export class WorkforceController {
     const actor = await this.auth.authenticate(token(request));
     return this.service.createRelationship(actor, body, key, String(response.locals.correlationId));
   }
+
+  // --- Roster Versions & Weekly Operations ---
+
+  @Get('weeks/:weekId/rosters')
+  async listRosterVersions(@Req() request: Request, @Param('weekId') weekId: string) {
+    const actor = await this.auth.authenticate(token(request));
+    return this.service.listRosterVersions(actor, weekId);
+  }
+
+  @Get('roster-versions/:versionId/entries')
+  async getRosterEntries(@Req() request: Request, @Param('versionId') versionId: string) {
+    const actor = await this.auth.authenticate(token(request));
+    return this.service.getRosterEntries(actor, versionId);
+  }
+
+  @Post('roster-versions/:versionId/publish')
+  async publishRosterVersion(
+    @Req() request: Request,
+    @Param('versionId') versionId: string,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const actor = await this.auth.authenticate(token(request));
+    return this.service.publishRosterVersion(actor, versionId, String(response.locals.correlationId));
+  }
+
+  @Post('weeks/:weekId/clone-roster')
+  async cloneWeekRoster(
+    @Req() request: Request,
+    @Param('weekId') weekId: string,
+    @Body() body: { sourceWeekId: string },
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const actor = await this.auth.authenticate(token(request));
+    return this.service.cloneWeekRoster(actor, body.sourceWeekId, weekId, String(response.locals.correlationId));
+  }
 }

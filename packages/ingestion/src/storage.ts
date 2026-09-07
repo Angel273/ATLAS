@@ -6,7 +6,7 @@
  * y proporciona streams de lectura para validación en workers.
  */
 
-import { S3Client, CreateBucketCommand, HeadBucketCommand, PutBucketVersioningCommand, GetBucketVersioningCommand, PutObjectCommand, HeadObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, CreateBucketCommand, HeadBucketCommand, PutBucketVersioningCommand, GetBucketVersioningCommand, PutObjectCommand, HeadObjectCommand, GetObjectCommand, DeleteObjectCommand, ListObjectVersionsCommand, DeleteObjectsCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { Readable } from 'node:stream';
 
@@ -61,12 +61,33 @@ export class ObjectStorage {
   async head(key: string) { return this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key })); }
 
   /**
-   * Elimina un objeto de almacenamiento en S3/MinIO de forma segura (silenciosa ante fallos).
+   * Elimina un objeto de almacenamiento en S3/MinIO de forma segura.
    *
    * @param key Clave del objeto en S3.
    */
   async delete(key: string) {
     try { await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key })); } catch {}
+  }
+
+  /**
+   * Purga completamente un objeto versionado en S3, eliminando todas sus versiones históricas y delete markers.
+   *
+   * @param key Clave del objeto en S3.
+   */
+  async purge(key: string) {
+    try {
+      const versions = await this.client.send(new ListObjectVersionsCommand({ Bucket: this.bucket, Prefix: key }));
+      const toDelete: { Key: string; VersionId?: string }[] = [];
+      for (const v of versions.Versions ?? []) {
+        if (v.Key === key && v.VersionId) toDelete.push({ Key: v.Key, VersionId: v.VersionId });
+      }
+      for (const d of versions.DeleteMarkers ?? []) {
+        if (d.Key === key && d.VersionId) toDelete.push({ Key: d.Key, VersionId: d.VersionId });
+      }
+      if (toDelete.length > 0) {
+        await this.client.send(new DeleteObjectsCommand({ Bucket: this.bucket, Delete: { Objects: toDelete } }));
+      }
+    } catch {}
   }
 
   /**

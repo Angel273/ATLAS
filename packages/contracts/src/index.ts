@@ -142,8 +142,17 @@ export const healthSchema = z.object({
 }).strict();
 
 export const accountSchema = z.object({
-  id: z.uuid(), name: z.string().min(1).max(120), timezone: z.string(),
+  id: z.uuid(),
+  name: z.string().min(1).max(120),
+  timezone: z.string(),
+  archivedAt: z.string().nullable().optional(),
+  activeWeekCode: z.string().nullable().optional(),
+  datasetCount: z.number().int().optional().default(0),
+  kpiCount: z.number().int().optional().default(0),
+  dashboardCount: z.number().int().optional().default(0),
+  rosterStatus: z.string().nullable().optional(),
 }).strict();
+export type Account = z.infer<typeof accountSchema>;
 export const accountListSchema = z.object({ items: z.array(accountSchema) }).strict();
 export const createAccountSchema = z.object({
   name: z.string().trim().min(2).max(120),
@@ -162,7 +171,39 @@ export const updateAccountSchema = z.object({
 });
 export type UpdateAccountInput = z.infer<typeof updateAccountSchema>;
 
-export const deleteAccountResultSchema = z.object({ deleted: z.literal(true) }).strict();
+export const switchAccountSchema = z.object({ accountId: z.uuid() }).strict();
+export type SwitchAccountInput = z.infer<typeof switchAccountSchema>;
+
+export const deleteAccountResultSchema = z.object({
+  deleted: z.boolean().optional(),
+  archived: z.boolean().optional(),
+}).strict();
+
+export const membershipAccountAccessSchema = z.object({
+  membershipId: z.uuid(),
+  accountIds: z.array(z.uuid()),
+}).strict();
+
+export const inviteUserSchema = z.object({
+  email: z.string().email().max(254).transform(value => value.trim().toLowerCase()),
+  role: roleSchema,
+  accountIds: z.array(z.uuid()).default([]),
+}).strict();
+export type InviteUserInput = z.infer<typeof inviteUserSchema>;
+
+export const inviteUserResultSchema = z.object({
+  id: z.uuid(),
+  email: z.string(),
+  role: roleSchema,
+  expiresAt: z.string(),
+  inviteUrl: z.string().optional(),
+}).strict();
+
+export const acceptInviteSchema = z.object({
+  token: z.string().min(1),
+  name: z.string().trim().min(1).max(120),
+  password: z.string().min(14).max(128),
+}).strict();
 
 export const loginSchema = z.object({ email: z.email().max(254).transform(value => value.trim().toLowerCase()), password: z.string().min(1).max(128) }).strict();
 export const totpSchema = z.object({ code: z.string().regex(/^\d{6}$/) }).strict();
@@ -170,6 +211,8 @@ export const sessionSchema = z.object({
   userId: z.uuid(), tenantId: z.uuid(), role: roleSchema,
   capabilities: z.array(capabilitySchema), organization: z.string(),
   name: z.string().default(''), email: z.string().default(''),
+  accountId: z.uuid().nullable().optional(),
+  accountName: z.string().nullable().optional(),
 }).strict();
 export type Session = z.infer<typeof sessionSchema>;
 export const loginResultSchema = z.object({ stage: z.enum(['mfa_setup', 'mfa_verify', 'authenticated']) }).strict();

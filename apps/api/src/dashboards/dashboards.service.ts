@@ -8,7 +8,7 @@
  */
 
 import { z } from 'zod';
-import { createPool, withTenant, type PoolClient, type Pool } from '@atlas/database';
+import { createPool, withTenant, withAccount, type PoolClient, type Pool } from '@atlas/database';
 import {
   DomainError,
   dashboardCreateSchema,
@@ -22,8 +22,15 @@ import {
 } from '@atlas/contracts';
 import { permit, audit } from '@atlas/ingestion';
 
-const dashSelect = `SELECT id, name, slug, description, current_version_id AS "currentVersionId", created_at::text AS "createdAt" FROM dashboards`;
-const verSelect = `SELECT id, dashboard_id AS "dashboardId", number, title, description, layout, global_filters AS "globalFilters", published_at::text AS "publishedAt", created_at::text AS "createdAt" FROM dashboard_versions`;
+const dashSelect = `SELECT id, account_id AS "accountId", name, slug, description, current_version_id AS "currentVersionId", created_at::text AS "createdAt" FROM dashboards`;
+const verSelect = `SELECT id, account_id AS "accountId", dashboard_id AS "dashboardId", number, title, description, layout, global_filters AS "globalFilters", published_at::text AS "publishedAt", created_at::text AS "createdAt" FROM dashboard_versions`;
+
+function execute<T>(pool: Pool, actor: DataActor, action: (client: PoolClient) => Promise<T>): Promise<T> {
+  if (actor.accountId) {
+    return withAccount(pool, actor.tenantId, actor.accountId, action);
+  }
+  return withTenant(pool, actor.tenantId, action);
+}
 
 /**
  * Servicio de gestión de dashboards gobernados, versiones inmutables y opciones de filtro operacional.
@@ -35,10 +42,9 @@ export class DashboardsService {
     await this.pool.end();
   }
 
-
   async list(actor: DataActor) {
     permit(actor, 'dashboard.read');
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       const isManager = actor.capabilities.includes('dashboard.manage');
       const condition = isManager ? '' : 'WHERE current_version_id IS NOT NULL';
       const dashboards = (await client.query(`${dashSelect} ${condition} ORDER BY created_at DESC LIMIT 100`)).rows;
@@ -94,26 +100,27 @@ export class DashboardsService {
 
   async get(actor: DataActor, id: string) {
     permit(actor, 'dashboard.read');
-    return withTenant(this.pool, actor.tenantId, client => this.getInternal(client, actor, id));
+    return execute(this.pool, actor, client => this.getInternal(client, actor, id));
   }
 
   async create(actor: DataActor, body: unknown, key: string, correlationId: string) {
     permit(actor, 'dashboard.manage');
+    if (!actor.accountId) throw new DomainError('ACCOUNT_REQUIRED', 400, 'Se requiere una cuenta activa para crear dashboards.');
     const input = dashboardCreateSchema.parse(body);
     z.uuid().parse(key);
 
-    return withTenant(this.pool, actor.tenantId, async client => {
-      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${actor.tenantId}:${input.slug}`]);
+    return execute(this.pool, actor, async client => {
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${actor.tenantId}:${actor.accountId}:${input.slug}`]);
       const existing = (await client.query(`${dashSelect} WHERE creation_key = $1`, [key])).rows[0];
       if (existing) {
         return this.getInternal(client, actor, existing.id);
       }
 
       const dashRes = await client.query<{ id: string }>(
-        `INSERT INTO dashboards (tenant_id, name, slug, description, creation_key)
-         VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO dashboards (tenant_id, account_id, name, slug, description, creation_key)
+         VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING id`,
-        [actor.tenantId, input.name, input.slug, input.description, key]
+        [actor.tenantId, actor.accountId, input.name, input.slug, input.description, key]
       );
       const dashboardId = dashRes.rows[0]!.id;
 
@@ -121,9 +128,9 @@ export class DashboardsService {
       const initialVerKey = crypto.randomUUID();
       await client.query(
         `INSERT INTO dashboard_versions (
-          tenant_id, dashboard_id, number, title, description, layout, global_filters, actor_id, creation_key
-        ) VALUES ($1, $2, 1, $3, $4, '[]'::jsonb, '{}'::jsonb, $5, $6)`,
-        [actor.tenantId, dashboardId, input.name, input.description, actor.userId, initialVerKey]
+          tenant_id, account_id, dashboard_id, number, title, description, layout, global_filters, actor_id, creation_key
+        ) VALUES ($1, $2, $3, 1, $4, $5, '[]'::jsonb, '{}'::jsonb, $6, $7)`,
+        [actor.tenantId, actor.accountId, dashboardId, input.name, input.description, actor.userId, initialVerKey]
       );
 
       await audit(client, actor, 'dashboard.created', dashboardId, correlationId);
@@ -137,9 +144,13 @@ export class DashboardsService {
     z.uuid().parse(key);
     const input = dashboardVersionCreateSchema.parse(body);
 
-    return withTenant(this.pool, actor.tenantId, async client => {
-      const dash = (await client.query(`${dashSelect} WHERE id = $1`, [dashboardId])).rows[0];
+    return execute(this.pool, actor, async client => {
+      const dash = (await client.query<{ id: string; account_id: string }>(
+        'SELECT id, account_id FROM dashboards WHERE id = $1',
+        [dashboardId]
+      )).rows[0];
       if (!dash) throw new DomainError('DASHBOARD_NOT_FOUND', 404, 'Dashboard no encontrado.');
+      const accountId = actor.accountId || dash.account_id;
 
       const existing = (await client.query(`${verSelect} WHERE creation_key = $1`, [key])).rows[0];
       if (existing) return dashboardVersionSchema.parse(existing);
@@ -152,11 +163,11 @@ export class DashboardsService {
 
       const verRes = await client.query<{ id: string }>(
         `INSERT INTO dashboard_versions (
-          tenant_id, dashboard_id, number, title, description, layout, global_filters, actor_id, creation_key
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          tenant_id, account_id, dashboard_id, number, title, description, layout, global_filters, actor_id, creation_key
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         RETURNING id`,
         [
-          actor.tenantId, dashboardId, nextNumber, input.title, input.description,
+          actor.tenantId, accountId, dashboardId, nextNumber, input.title, input.description,
           JSON.stringify(input.layout), JSON.stringify(input.globalFilters),
           actor.userId, key
         ]
@@ -174,7 +185,7 @@ export class DashboardsService {
     z.uuid().parse(versionId);
     z.uuid().parse(key);
 
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       const dash = (await client.query(`${dashSelect} WHERE id = $1 FOR UPDATE`, [dashboardId])).rows[0];
       if (!dash) throw new DomainError('DASHBOARD_NOT_FOUND', 404, 'Dashboard no encontrado.');
 
@@ -206,7 +217,7 @@ export class DashboardsService {
     permit(actor, 'dashboard.read');
     z.uuid().parse(dashboardId);
 
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       const dashboard = await this.getInternal(client, actor, dashboardId);
       const layout = dashboard.currentVersion?.layout || [];
 

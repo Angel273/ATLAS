@@ -9,7 +9,7 @@
  */
 
 import { z } from 'zod';
-import { createPool, withTenant, type Pool } from '@atlas/database';
+import { createPool, withTenant, withAccount, type Pool, type PoolClient } from '@atlas/database';
 import {
   DomainError,
   conversationSchema,
@@ -30,9 +30,16 @@ import { DashboardsService } from '../dashboards/dashboards.service.js';
 import { TOOL_DEFINITIONS, executeTool, type ToolServices } from './tools.js';
 import { getAIProvider, type AIMessage } from './provider.js';
 
-const convSelect = `SELECT id, tenant_id AS "tenantId", user_id AS "userId", title, created_at::text AS "createdAt", updated_at::text AS "updatedAt" FROM conversations`;
+const convSelect = `SELECT id, account_id AS "accountId", tenant_id AS "tenantId", user_id AS "userId", title, created_at::text AS "createdAt", updated_at::text AS "updatedAt" FROM conversations`;
 const msgSelect = `SELECT id, conversation_id AS "conversationId", role, content, grounding_context AS "groundingContext", tokens_used AS "tokensUsed", created_at::text AS "createdAt" FROM conversation_messages`;
 const toolExecSelect = `SELECT id, conversation_id AS "conversationId", message_id AS "messageId", tool_name AS "toolName", parameters_redacted AS "parametersRedacted", result_summary AS "resultSummary", duration_ms AS "durationMs", status, created_at::text AS "createdAt" FROM conversation_tool_executions`;
+
+function execute<T>(pool: Pool, actor: DataActor, action: (client: PoolClient) => Promise<T>): Promise<T> {
+  if (actor.accountId) {
+    return withAccount(pool, actor.tenantId, actor.accountId, action);
+  }
+  return withTenant(pool, actor.tenantId, action);
+}
 
 /**
  * Servicio de orquestación de conversaciones con IA y ejecución gobernada de tools.
@@ -40,7 +47,6 @@ const toolExecSelect = `SELECT id, conversation_id AS "conversationId", message_
 export class ConversationsService {
   readonly pool: Pool = createPool(process.env.DATABASE_URL);
   private readonly toolServices: ToolServices;
-
 
   constructor(
     kpi: KpiService,
@@ -68,7 +74,7 @@ export class ConversationsService {
 
   async list(actor: DataActor) {
     permit(actor, 'ai.use');
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       const rows = (await client.query(
         `${convSelect} WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 50`,
         [actor.userId]
@@ -79,15 +85,16 @@ export class ConversationsService {
 
   async create(actor: DataActor, body: unknown, correlation: string) {
     permit(actor, 'ai.use');
+    if (!actor.accountId) throw new DomainError('ACCOUNT_REQUIRED', 400, 'Se requiere una cuenta activa para iniciar conversaciones.');
     const input = conversationCreateSchema.parse(body || {});
     const title = input.title?.trim() || 'Nueva consulta operacional';
 
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       const row = (await client.query(
-        `INSERT INTO conversations (tenant_id, user_id, title)
-         VALUES ($1, $2, $3)
-         RETURNING id, tenant_id AS "tenantId", user_id AS "userId", title, created_at::text AS "createdAt", updated_at::text AS "updatedAt"`,
-        [actor.tenantId, actor.userId, title]
+        `INSERT INTO conversations (tenant_id, account_id, user_id, title)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, account_id AS "accountId", tenant_id AS "tenantId", user_id AS "userId", title, created_at::text AS "createdAt", updated_at::text AS "updatedAt"`,
+        [actor.tenantId, actor.accountId, actor.userId, title]
       )).rows[0];
 
       await audit(client, actor, 'ai.conversation_created', row.id, correlation);
@@ -99,7 +106,7 @@ export class ConversationsService {
     permit(actor, 'ai.use');
     z.uuid().parse(conversationId);
 
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       const convRow = (await client.query(
         `${convSelect} WHERE id = $1 AND user_id = $2`,
         [conversationId, actor.userId]
@@ -132,7 +139,7 @@ export class ConversationsService {
     z.uuid().parse(conversationId);
     const input = sendMessageSchema.parse(body);
 
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       const convRow = (await client.query(
         `${convSelect} WHERE id = $1 AND user_id = $2`,
         [conversationId, actor.userId]

@@ -46,6 +46,7 @@ export const workforceWeekUpdateSchema = z.object({
 
 export const workforceWeekSchema = z.object({
   id: z.uuid(),
+  accountId: z.uuid().optional(),
   weekCode: z.string().regex(/^\d{4}-W\d{2}$/),
   yearNumber: z.number().int(),
   weekNumber: z.number().int().min(1).max(53),
@@ -73,6 +74,7 @@ export const employeeTypeCreateSchema = z.object({
 
 export const employeeTypeSchema = employeeTypeCreateSchema.extend({
   id: z.uuid(),
+  accountId: z.uuid().optional(),
   createdAt: z.string(),
 }).strict();
 
@@ -119,6 +121,7 @@ export const employeeCreateSchema = z.object({
 
 export const employeeSchema = z.object({
   id: z.uuid(),
+  accountId: z.uuid().optional(),
   code: z.string(),
   firstName: z.string(),
   lastName: z.string(),
@@ -237,4 +240,93 @@ export const teamRosterImportResultSchema = z.object({
   teamsSummary: z.array(teamRosterSummarySchema),
 }).strict();
 export type TeamRosterImportResult = z.infer<typeof teamRosterImportResultSchema>;
+
+// --- Versioned Rosters & Snapshot Entries ---
+export const rosterStatusSchema = z.enum(['uploaded', 'validating', 'ready', 'published', 'failed']);
+export type RosterStatus = z.infer<typeof rosterStatusSchema>;
+
+export const rosterVersionSchema = z.object({
+  id: z.uuid(),
+  tenantId: z.uuid(),
+  accountId: z.uuid(),
+  weekId: z.uuid(),
+  versionNumber: z.number().int(),
+  status: rosterStatusSchema,
+  storagePath: z.string().nullable().optional(),
+  sha256: z.string().nullable().optional(),
+  mapping: z.record(z.string(), z.any()).default({}),
+  rowCount: z.number().int().default(0),
+  issueCount: z.number().int().default(0),
+  createdBy: z.uuid(),
+  createdAt: z.string(),
+  publishedAt: z.string().nullable().optional(),
+}).strict();
+export type RosterVersion = z.infer<typeof rosterVersionSchema>;
+
+export const rosterVersionListSchema = z.object({
+  items: z.array(rosterVersionSchema),
+}).strict();
+export type RosterVersionList = z.infer<typeof rosterVersionListSchema>;
+
+export const rosterEntrySchema = z.object({
+  id: z.uuid(),
+  tenantId: z.uuid(),
+  accountId: z.uuid(),
+  rosterVersionId: z.uuid(),
+  employeeId: z.uuid(),
+  employeeCode: z.string(),
+  bmsId: z.string().nullable().optional(),
+  wave: z.string().nullable().optional(),
+  teamId: z.uuid().nullable().optional(),
+  teamName: z.string().nullable().optional(),
+  employeeTypeSlug: z.string().nullable().optional(),
+  supervisorId: z.uuid().nullable().optional(),
+  supervisorName: z.string().nullable().optional(),
+  floorManagerId: z.uuid().nullable().optional(),
+  floorManagerName: z.string().nullable().optional(),
+  metadata: z.record(z.string(), z.any()).default({}),
+  sourceSheet: z.string().nullable().optional(),
+  sourceRow: z.number().int().nullable().optional(),
+}).strict();
+export type RosterEntry = z.infer<typeof rosterEntrySchema>;
+
+export const rosterEntryListSchema = z.object({
+  items: z.array(rosterEntrySchema),
+}).strict();
+export type RosterEntryList = z.infer<typeof rosterEntryListSchema>;
+
+// --- Dataset Workforce Bindings ---
+export const datasetWorkforceBindingSchema = z.object({
+  id: z.uuid(),
+  tenantId: z.uuid(),
+  accountId: z.uuid(),
+  datasetId: z.uuid(),
+  datasetVersionId: z.uuid(),
+  versionNumber: z.number().int(),
+  status: z.enum(['draft', 'published', 'archived']),
+  employeeKeyField: z.string(),
+  keyType: z.enum(['employee_code', 'bms_id']),
+  temporalStrategy: z.enum(['event_date', 'fixed_week']),
+  dateField: z.string().nullable().optional(),
+  fixedWeekId: z.uuid().nullable().optional(),
+  exposedDimensions: z.array(z.string()),
+  coverageThreshold: z.number(),
+  createdAt: z.string(),
+  publishedAt: z.string().nullable().optional(),
+}).strict();
+export type DatasetWorkforceBinding = z.infer<typeof datasetWorkforceBindingSchema>;
+
+export const createDatasetWorkforceBindingSchema = z.object({
+  datasetId: z.uuid(),
+  datasetVersionId: z.uuid(),
+  employeeKeyField: z.string().min(1),
+  keyType: z.enum(['employee_code', 'bms_id']).default('employee_code'),
+  temporalStrategy: z.enum(['event_date', 'fixed_week']).default('event_date'),
+  dateField: z.string().optional(),
+  fixedWeekId: z.uuid().optional(),
+  exposedDimensions: z.array(z.string()).default(['supervisor', 'floor_manager', 'wave', 'team']),
+  coverageThreshold: z.number().min(0).max(100).default(85),
+}).strict();
+export type CreateDatasetWorkforceBinding = z.infer<typeof createDatasetWorkforceBindingSchema>;
+
 

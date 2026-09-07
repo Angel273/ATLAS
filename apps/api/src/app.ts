@@ -10,7 +10,7 @@
  */
 
 import 'reflect-metadata';
-import { Controller, Get, Post, Patch, Delete, Body, Req, Res, Param, Headers, Inject, Module, HttpCode, type INestApplication } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Put, Body, Req, Res, Param, Headers, Inject, Module, HttpCode, type INestApplication } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { json, type Request, type Response, type NextFunction } from 'express';
 import cookieParser from 'cookie-parser';
@@ -22,6 +22,7 @@ import {
   createUserSchema, createUserResultSchema, removeMemberResultSchema,
   userProfileSchema, updateProfileSchema, changePasswordSchema, changePasswordResultSchema,
   adminUserDetailSchema, adminUpdateUserSchema, adminUpdateUserResultSchema,
+  switchAccountSchema, inviteUserSchema, acceptInviteSchema,
 } from '@atlas/contracts';
 import { AuthService } from './identity/auth.service.js';
 import { UsersService } from './identity/users.service.js';
@@ -93,6 +94,39 @@ class AuthController {
       email: self.email,
     });
   }
+  @Post('switch-account') @HttpCode(200)
+  async switchAccount(@Body() body: unknown, @Req() request: Request, @Res({ passthrough: true }) response: Response) {
+    const input = switchAccountSchema.parse(body);
+    const result = await this.auth.switchAccount(token(request), input.accountId);
+    setSession(response, result);
+    const principal = await this.auth.authenticate(result.token);
+    const [organization, self] = await Promise.all([
+      this.organizations.name(principal),
+      this.users.getSelf(principal),
+    ]);
+    return sessionSchema.parse({
+      ...principal,
+      organization,
+      name: self.name,
+      email: self.email,
+    });
+  }
+  @Post('clear-account') @HttpCode(200)
+  async clearAccount(@Req() request: Request, @Res({ passthrough: true }) response: Response) {
+    const result = await this.auth.clearActiveAccount(token(request));
+    setSession(response, result);
+    const principal = await this.auth.authenticate(result.token);
+    const [organization, self] = await Promise.all([
+      this.organizations.name(principal),
+      this.users.getSelf(principal),
+    ]);
+    return sessionSchema.parse({
+      ...principal,
+      organization,
+      name: self.name,
+      email: self.email,
+    });
+  }
   @Post('logout') @HttpCode(204)
   async logout(@Req() request: Request, @Res({ passthrough: true }) response: Response) {
     await this.auth.logout(token(request)); response.clearCookie(cookieName(), cookieOptions());
@@ -120,6 +154,18 @@ class AccountsController {
     const principal = await this.auth.authenticate(token(request));
     return deleteAccountResultSchema.parse(await this.organizations.deleteAccount(principal, id, String(response.locals.correlationId)));
   }
+  @Post(':id/unarchive') async unarchive(@Req() request: Request, @Res({ passthrough: true }) response: Response, @Param('id') id: string) {
+    const principal = await this.auth.authenticate(token(request));
+    return this.organizations.unarchiveAccount(principal, id, String(response.locals.correlationId));
+  }
+  @Get(':id/members') async getMembers(@Req() request: Request, @Param('id') id: string) {
+    const principal = await this.auth.authenticate(token(request));
+    return this.organizations.getAccountMembers(principal, id);
+  }
+  @Put(':id/members') async setMembers(@Req() request: Request, @Res({ passthrough: true }) response: Response, @Param('id') id: string, @Body() body: { memberIds: string[] }) {
+    const principal = await this.auth.authenticate(token(request));
+    return this.organizations.setAccountMembers(principal, id, body.memberIds ?? [], String(response.locals.correlationId));
+  }
 }
 @Controller('users')
 class UsersController {
@@ -134,6 +180,14 @@ class UsersController {
   @Post() async create(@Req() request: Request, @Res({ passthrough: true }) response: Response, @Body() body: unknown) {
     const principal = await this.auth.authenticate(token(request));
     return createUserResultSchema.parse(await this.users.createUser(principal, createUserSchema.parse(body), String(response.locals.correlationId)));
+  }
+  @Post('invite') async invite(@Req() request: Request, @Res({ passthrough: true }) response: Response, @Body() body: unknown) {
+    const principal = await this.auth.authenticate(token(request));
+    return this.users.inviteUser(principal, inviteUserSchema.parse(body), String(response.locals.correlationId));
+  }
+  @Post('accept-invite') @HttpCode(200)
+  async acceptInvite(@Req() request: Request, @Res({ passthrough: true }) response: Response, @Body() body: unknown) {
+    return this.users.acceptInvite(acceptInviteSchema.parse(body), String(response.locals.correlationId));
   }
   @Get('me') async getProfile(@Req() request: Request) {
     const principal = await this.auth.authenticate(token(request));

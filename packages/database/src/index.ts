@@ -49,6 +49,42 @@ export async function withTenant<T>(pool: Pool, tenantId: string, action: (trans
 }
 
 /**
+ * Ejecuta una operación transaccional dentro del ámbito estricto de una cuenta y tenant,
+ * inyectando las variables de configuración `atlas.tenant_id` y `atlas.account_id` requeridas por las políticas RLS compuestas.
+ *
+ * @param pool Pool de conexiones a PostgreSQL.
+ * @param tenantId Identificador UUID v4 del tenant autenticado.
+ * @param accountId Identificador UUID v4 de la cuenta operacional activa.
+ * @param action Función asíncrona que recibe el cliente de la transacción para ejecutar queries.
+ * @returns Resultado de la ejecución de la función `action`.
+ */
+export async function withAccount<T>(
+  pool: Pool,
+  tenantId: string,
+  accountId: string,
+  action: (transaction: PoolClient) => Promise<T>
+): Promise<T> {
+  z.uuid().parse(tenantId);
+  z.uuid().parse(accountId);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      "SELECT set_config('atlas.tenant_id', $1, true), set_config('atlas.account_id', $2, true)",
+      [tenantId, accountId]
+    );
+    const result = await action(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
  * Ejecuta una operación transaccional dentro del ámbito de identidad de un usuario,
  * configurando `atlas.user_id` para políticas de seguridad a nivel de membresías y credenciales.
  *

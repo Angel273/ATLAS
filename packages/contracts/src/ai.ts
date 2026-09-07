@@ -32,6 +32,7 @@ export type GroundingCitation = z.infer<typeof groundingCitationSchema>;
 
 export const conversationSchema = z.object({
   id: z.string().uuid(),
+  accountId: z.string().uuid().optional(),
   tenantId: z.string().uuid(),
   userId: z.string().uuid(),
   title: z.string().min(1).max(255),

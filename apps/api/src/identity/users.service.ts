@@ -6,6 +6,7 @@
  * Implementa bloqueos transaccionales (`pg_advisory_xact_lock`) para garantizar que nunca quede una organización sin administradores activos.
  */
 
+import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { withIdentity, type PoolClient } from '@atlas/database';
 import {
@@ -14,7 +15,7 @@ import {
   changePasswordResultSchema, roleLabels, type Role, type CreateUserInput,
   type UpdateProfileInput, type ChangePasswordInput,
   adminUserDetailSchema, adminUpdateUserSchema, adminUpdateUserResultSchema,
-  type AdminUpdateUserInput,
+  type AdminUpdateUserInput, inviteUserSchema, inviteUserResultSchema, type InviteUserInput,
 } from '@atlas/contracts';
 import { AuthService, requireCapability, type Principal } from './auth.service.js';
 import { hashPassword, verifyPassword } from './crypto.js';
@@ -406,11 +407,105 @@ export class UsersService {
       if (!valid) throw new AppError('INVALID_CREDENTIALS', 401, 'La contraseña actual no es correcta.');
       const nextHash = await hashPassword(data.newPassword);
       await client.query('UPDATE identity.users SET password_hash = $1 WHERE id = $2', [nextHash, principal.userId]);
+      // Revocar todas las sesiones existentes al cambiar la contraseña por seguridad
+      await client.query('DELETE FROM identity.sessions WHERE user_id = $1', [principal.userId]);
       await client.query(
         'INSERT INTO audit_events(tenant_id, actor_id, event, correlation_id, target_id) VALUES ($1, $2, $3, $4, $5)',
         [principal.tenantId, principal.userId, 'user.password_changed', correlationId, principal.userId]
       );
       return changePasswordResultSchema.parse({ updated: true });
+    });
+  }
+
+  async inviteUser(principal: Principal, input: InviteUserInput, correlationId: string) {
+    requireCapability(principal, 'user.manage');
+    const data = inviteUserSchema.parse(input);
+    z.uuid().parse(correlationId);
+    return this.transaction(principal, async client => {
+      const existingMember = await client.query(
+        'SELECT 1 FROM identity.memberships m JOIN identity.users u ON u.id = m.user_id WHERE m.tenant_id = $1 AND u.email = $2',
+        [principal.tenantId, data.email]
+      );
+      if (existingMember.rowCount) throw new AppError('USER_ALREADY_MEMBER', 409, 'El usuario ya es miembro de esta organización.');
+
+      const token = randomBytes(32).toString('hex');
+      const hash = createHash('sha256').update(token).digest('hex');
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+      const inserted = await client.query<{ id: string }>(
+        `INSERT INTO identity.invitations(tenant_id, email, role, token_hash, invited_by, account_ids, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id`,
+        [principal.tenantId, data.email, data.role, hash, principal.userId, data.accountIds, expiresAt]
+      );
+
+      await client.query(
+        'INSERT INTO audit_events(tenant_id, actor_id, event, correlation_id, target_id) VALUES ($1, $2, $3, $4, $5)',
+        [principal.tenantId, principal.userId, 'user.invited', correlationId, inserted.rows[0]!.id]
+      );
+
+      return inviteUserResultSchema.parse({
+        id: inserted.rows[0]!.id,
+        email: data.email,
+        role: data.role,
+        expiresAt: expiresAt.toISOString(),
+        inviteUrl: `/invite/${token}`,
+      });
+    });
+  }
+
+  async acceptInvite(input: { token: string; name: string; password: string }, correlationId: string) {
+    z.uuid().parse(correlationId);
+    const hash = createHash('sha256').update(input.token).digest('hex');
+    const invResult = await this.auth.pool.query<{
+      id: string;
+      tenant_id: string;
+      email: string;
+      role: Role;
+      account_ids: string[];
+    }>(
+      'SELECT id, tenant_id, email, role, account_ids FROM identity.invitations WHERE token_hash = $1 AND expires_at > now() AND accepted_at IS NULL',
+      [hash]
+    );
+    if (!invResult.rows[0]) throw new AppError('INVITATION_INVALID', 400, 'La invitación no es válida o ya expiró.');
+    const inv = invResult.rows[0];
+
+    const passwordHash = await hashPassword(input.password);
+
+    return withIdentity(this.auth.pool, inv.tenant_id, async client => {
+      let userId: string;
+      const existingUser = await client.query<{ id: string }>('SELECT id FROM identity.users WHERE email = $1', [inv.email]);
+      if (existingUser.rows[0]) {
+        userId = existingUser.rows[0].id;
+        await client.query('UPDATE identity.users SET name = $1 WHERE id = $2', [input.name, userId]);
+      } else {
+        const newUser = await client.query<{ id: string }>(
+          'INSERT INTO identity.users(email, name, password_hash) VALUES ($1, $2, $3) RETURNING id',
+          [inv.email, input.name, passwordHash]
+        );
+        userId = newUser.rows[0]!.id;
+      }
+
+      const membership = await client.query<{ id: string }>(
+        'INSERT INTO identity.memberships(tenant_id, user_id, role) VALUES ($1, $2, $3) RETURNING id',
+        [inv.tenant_id, userId, inv.role]
+      );
+
+      for (const accountId of inv.account_ids) {
+        await client.query(
+          'INSERT INTO identity.membership_account_access(tenant_id, membership_id, account_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+          [inv.tenant_id, membership.rows[0]!.id, accountId]
+        );
+      }
+
+      await client.query('UPDATE identity.invitations SET accepted_at = now() WHERE id = $1', [inv.id]);
+
+      await client.query(
+        'INSERT INTO audit_events(tenant_id, actor_id, event, correlation_id, target_id) VALUES ($1, $2, $3, $4, $5)',
+        [inv.tenant_id, userId, 'invitation.accepted', correlationId, inv.id]
+      );
+
+      return { ok: true, email: inv.email };
     });
   }
 

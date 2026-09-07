@@ -28,6 +28,7 @@ export const semanticRelationshipCreateSchema = z.object({
 
 export const semanticRelationshipSchema = semanticRelationshipCreateSchema.extend({
   id: z.uuid(),
+  accountId: z.uuid().optional(),
   publishedAt: z.string(),
   createdAt: z.string(),
 }).strict();
@@ -75,6 +76,7 @@ export const kpiCreateSchema = z.object({
 
 export const kpiSchema = kpiCreateSchema.extend({
   id: z.uuid(),
+  accountId: z.uuid().optional(),
   number: z.number().int(),
   modelVersionId: z.uuid(),
   publishedAt: z.string().nullable(),

@@ -8,6 +8,7 @@
 
 'use client';
 import { useEffect, useState, type FormEvent } from 'react';
+import Link from 'next/link';
 import {
   Users,
   Shield,
@@ -800,7 +801,7 @@ export default function WorkforcePage() {
                       <th>Periodo (Lunes a Domingo)</th>
                       <th>Estado</th>
                       <th>Atributos Dinámicos</th>
-                      {canManage && <th>Acción</th>}
+                      <th>Roster & Acciones</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -862,34 +863,39 @@ export default function WorkforcePage() {
                             </div>
                           )}
                         </td>
-                        {canManage && (
-                          <td>
-                            <div style={{ display: 'inline-flex', gap: '6px' }}>
-                              {w.status !== 'current' && (
-                                <button
-                                  type="button"
-                                  className="button"
-                                  onClick={() => { void handleSetCurrentWeek(w.id); }}
-                                  disabled={busy}
-                                  style={{ fontSize: '11px', padding: '2px 8px' }}
-                                >
-                                  Fijar Actual
-                                </button>
-                              )}
-                              {w.status !== 'closed' && (
-                                <button
-                                  type="button"
-                                  className="button"
-                                  onClick={() => { void handleCloseWeek(w.id); }}
-                                  disabled={busy}
-                                  style={{ fontSize: '11px', padding: '2px 8px' }}
-                                >
-                                  Cerrar
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        )}
+                        <td>
+                          <div style={{ display: 'inline-flex', gap: '6px' }}>
+                            <Link
+                              href={session?.accountId ? `/app/accounts/${session.accountId}/workforce/weeks/${w.id}` : `/app/workforce/weeks/${w.id}`}
+                              className="button"
+                              style={{ fontSize: '11px', padding: '2px 8px', borderColor: 'var(--accent)', color: 'var(--accent)' }}
+                            >
+                              Ver Roster
+                            </Link>
+                            {canManage && w.status !== 'current' && (
+                              <button
+                                type="button"
+                                className="button"
+                                onClick={() => { void handleSetCurrentWeek(w.id); }}
+                                disabled={busy}
+                                style={{ fontSize: '11px', padding: '2px 8px' }}
+                              >
+                                Fijar Actual
+                              </button>
+                            )}
+                            {canManage && w.status !== 'closed' && (
+                              <button
+                                type="button"
+                                className="button"
+                                onClick={() => { void handleCloseWeek(w.id); }}
+                                disabled={busy}
+                                style={{ fontSize: '11px', padding: '2px 8px' }}
+                              >
+                                Cerrar
+                              </button>
+                            )}
+                          </div>
+                        </td>
                       </tr>
                     ))}
                   </tbody>

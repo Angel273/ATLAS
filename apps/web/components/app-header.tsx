@@ -1,29 +1,42 @@
 /**
  * @file apps/web/components/app-header.tsx
  * @description Barra de navegación superior persistente de la plataforma ATLAS (@atlas/web).
- * Muestra el logotipo de la marca, enlaces a los módulos principales (Datasets, Capa Semántica/KPIs,
- * Dashboards, Workforce, AI Chat y Organización), modal de perfil de usuario y control de cierre de sesión.
+ * Muestra la marca, navegación por módulos adaptada a la cuenta activa (/app/accounts/:accountId/...),
+ * selector rápido hacia el Portal de Cuentas, información de organización/rol, perfil y cierre de sesión.
  */
 
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { ShieldCheck, LogOut, Database, GitBranch, LayoutDashboard, Building2, Users, Sparkles, User } from 'lucide-react';
+import {
+  ShieldCheck,
+  LogOut,
+  Database,
+  GitBranch,
+  LayoutDashboard,
+  Building2,
+  Users,
+  Sparkles,
+  User,
+  Briefcase,
+  ChevronRight,
+  ArrowLeftRight,
+} from 'lucide-react';
 import { Brand } from './workspace';
 import { ProfileDialog } from './profile-dialog';
 import type { Session } from '@atlas/contracts';
 
 interface AppHeaderProps {
   session: Session | null;
+  accountId?: string;
   onLogout?: () => void;
 }
 
 /**
  * Componente de encabezado de aplicación con navegación por módulos y gestión de sesión.
  */
-export function AppHeader({ session, onLogout }: AppHeaderProps) {
-
+export function AppHeader({ session, accountId: propAccountId, onLogout }: AppHeaderProps) {
   const pathname = usePathname();
   const router = useRouter();
   const [profileOpen, setProfileOpen] = useState(false);
@@ -35,6 +48,14 @@ export function AppHeader({ session, onLogout }: AppHeaderProps) {
     }
   }, [session]);
 
+  // Determine active account ID from props, session, or URL path
+  const activeAccountId = useMemo(() => {
+    if (propAccountId) return propAccountId;
+    if (session?.accountId) return session.accountId;
+    const match = pathname.match(/\/app\/accounts\/([a-f0-9-]+)/i);
+    return match ? match[1] : undefined;
+  }, [propAccountId, session?.accountId, pathname]);
+
   async function handleLogout() {
     if (onLogout) {
       onLogout();
@@ -42,71 +63,110 @@ export function AppHeader({ session, onLogout }: AppHeaderProps) {
     }
     try {
       await fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'same-origin' });
-      router.replace('/login');
-    } catch {
+    } finally {
       router.replace('/login');
     }
   }
 
   const displayName = userName || (session?.email ? session.email.replace(/^(.).*@/, '$1***@') : '');
 
+  // Base URL prefix for current account modules
+  const basePath = activeAccountId ? `/app/accounts/${activeAccountId}` : '/app';
+
   return (
     <>
       <header className="header">
         <Brand />
-        <nav className="header-context" aria-label="Navegación del espacio de trabajo" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <nav
+          className="header-context"
+          aria-label="Navegación del espacio de trabajo"
+          style={{ display: 'flex', gap: '8px', alignItems: 'center' }}
+        >
+          {/* Portal de Cuentas */}
           <Link
-            href="/app"
-            className={`button ${pathname === '/app' ? 'primary' : ''}`}
+            href="/portal/accounts"
+            className={`button ${pathname.startsWith('/portal') ? 'primary' : ''}`}
             style={{ height: '32px', fontSize: '13px', padding: '0 10px', gap: '6px' }}
+            title="Ir al Portal de Cuentas"
           >
             <Building2 size={14} />
-            <span>Organización</span>
+            <span>Portal</span>
           </Link>
-          <Link
-            href="/app/datasets"
-            className={`button ${pathname.startsWith('/app/datasets') ? 'primary' : ''}`}
-            style={{ height: '32px', fontSize: '13px', padding: '0 10px', gap: '6px' }}
-          >
-            <Database size={14} />
-            <span>Datasets</span>
-          </Link>
-          <Link
-            href="/app/kpis"
-            className={`button ${pathname.startsWith('/app/kpis') ? 'primary' : ''}`}
-            style={{ height: '32px', fontSize: '13px', padding: '0 10px', gap: '6px' }}
-          >
-            <GitBranch size={14} />
-            <span>KPIs & Semántica</span>
-          </Link>
-          <Link
-            href="/app/dashboards"
-            className={`button ${pathname.startsWith('/app/dashboards') ? 'primary' : ''}`}
-            style={{ height: '32px', fontSize: '13px', padding: '0 10px', gap: '6px' }}
-          >
-            <LayoutDashboard size={14} />
-            <span>Dashboards</span>
-          </Link>
-          <Link
-            href="/app/workforce"
-            className={`button ${pathname.startsWith('/app/workforce') ? 'primary' : ''}`}
-            style={{ height: '32px', fontSize: '13px', padding: '0 10px', gap: '6px' }}
-          >
-            <Users size={14} />
-            <span>Workforce</span>
-          </Link>
-          <Link
-            href="/app/chat"
-            className={`button ${pathname.startsWith('/app/chat') ? 'primary' : ''}`}
-            style={{ height: '32px', fontSize: '13px', padding: '0 10px', gap: '6px' }}
-          >
-            <Sparkles size={14} />
-            <span>Asistente IA</span>
-          </Link>
+
+          {activeAccountId && (
+            <>
+              <Link
+                href={`${basePath}/datasets`}
+                className={`button ${pathname.includes('/datasets') ? 'primary' : ''}`}
+                style={{ height: '32px', fontSize: '13px', padding: '0 10px', gap: '6px' }}
+              >
+                <Database size={14} />
+                <span>Datasets</span>
+              </Link>
+              <Link
+                href={`${basePath}/kpis`}
+                className={`button ${pathname.includes('/kpis') ? 'primary' : ''}`}
+                style={{ height: '32px', fontSize: '13px', padding: '0 10px', gap: '6px' }}
+              >
+                <GitBranch size={14} />
+                <span>KPIs & Semántica</span>
+              </Link>
+              <Link
+                href={`${basePath}/dashboards`}
+                className={`button ${pathname.includes('/dashboards') ? 'primary' : ''}`}
+                style={{ height: '32px', fontSize: '13px', padding: '0 10px', gap: '6px' }}
+              >
+                <LayoutDashboard size={14} />
+                <span>Dashboards</span>
+              </Link>
+              <Link
+                href={`${basePath}/workforce`}
+                className={`button ${pathname.includes('/workforce') ? 'primary' : ''}`}
+                style={{ height: '32px', fontSize: '13px', padding: '0 10px', gap: '6px' }}
+              >
+                <Users size={14} />
+                <span>Workforce</span>
+              </Link>
+              <Link
+                href={`${basePath}/chat`}
+                className={`button ${pathname.includes('/chat') ? 'primary' : ''}`}
+                style={{ height: '32px', fontSize: '13px', padding: '0 10px', gap: '6px' }}
+              >
+                <Sparkles size={14} />
+                <span>Asistente IA</span>
+              </Link>
+            </>
+          )}
         </nav>
+
         <div className="header-actions">
           {session && (
             <>
+              {/* Account badge with quick switch button */}
+              {activeAccountId && (
+                <Link
+                  href="/portal/accounts"
+                  className="badge"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    borderColor: 'var(--accent)',
+                    color: 'var(--accent)',
+                    background: 'var(--surface-muted)',
+                    textDecoration: 'none',
+                    padding: '4px 8px',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                  }}
+                  title="Haz clic para cambiar de cuenta o volver al portal"
+                >
+                  <Briefcase size={12} />
+                  <span>{session.accountName || 'Cuenta Operativa'}</span>
+                  <ArrowLeftRight size={10} style={{ marginLeft: 3, opacity: 0.7 }} />
+                </Link>
+              )}
+
               <button
                 className="button"
                 style={{ height: '32px', fontSize: '12px', padding: '0 10px', gap: '6px', cursor: 'pointer' }}

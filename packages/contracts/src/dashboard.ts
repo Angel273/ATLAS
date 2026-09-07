@@ -78,6 +78,7 @@ export type DashboardVersionCreate = z.infer<typeof dashboardVersionCreateSchema
 export const dashboardVersionSchema = dashboardVersionCreateSchema.extend({
   id: z.uuid(),
   dashboardId: z.uuid(),
+  accountId: z.uuid().optional(),
   number: z.number().int(),
   publishedAt: z.string().nullable(),
   createdAt: z.string(),
@@ -86,6 +87,7 @@ export type DashboardVersion = z.infer<typeof dashboardVersionSchema>;
 
 export const dashboardSchema = dashboardCreateSchema.extend({
   id: z.uuid(),
+  accountId: z.uuid().optional(),
   currentVersionId: z.uuid().nullable(),
   currentVersion: dashboardVersionSchema.nullable().optional(),
   createdAt: z.string(),

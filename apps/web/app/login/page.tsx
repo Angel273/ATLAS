@@ -34,7 +34,7 @@ export default function LoginPage() {
       const result = stage === 'login'
         ? await api('/auth/login', loginResultSchema, { method: 'POST', body: JSON.stringify({ email: form.get('email'), password: form.get('password') }) })
         : await api('/auth/mfa/verify', loginResultSchema, { method: 'POST', body: JSON.stringify({ code: form.get('code') }) });
-      if (result.stage === 'authenticated') { setSecret(''); router.replace('/app'); return; }
+      if (result.stage === 'authenticated') { setSecret(''); router.replace('/portal/accounts'); return; }
       if (result.stage === 'mfa_setup') {
         const setup = await api('/auth/mfa/setup', mfaSetupSchema); setSecret(setup.secret);
       }

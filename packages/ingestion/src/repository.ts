@@ -7,7 +7,7 @@
  */
 
 import { z } from 'zod';
-import { createPool, withTenant, type PoolClient } from '@atlas/database';
+import { createPool, withTenant, withAccount, type Pool, type PoolClient } from '@atlas/database';
 import { actorSchema, DomainError, datasetCreateSchema, datasetListSchema, datasetSchema, versionSchema, versionListSchema, uploadCreateSchema, uploadResultSchema, mappingSchema, dataPreviewSchema, issueReportSchema, type DataActor, type DatasetVersion } from '@atlas/contracts';
 import { ObjectStorage } from './storage.js';
 import { ImportQueue } from './queue.js';
@@ -23,8 +23,20 @@ export function permit(actor: DataActor, capability: string) {
   actorSchema.parse(actor);
   if (!actor.capabilities.includes(capability)) throw new DomainError('FORBIDDEN', 403, 'No tienes permiso para realizar esta acción.');
 }
-export const versionSelect = `SELECT id,dataset_id AS "datasetId",number,filename,bytes::int,regional,state,sha256,profile,mapping,row_count::float8 AS rows,issues,issue_count AS "issueCount",error_code AS "errorCode",published_at::text AS "publishedAt",created_at::text AS "createdAt",progress FROM dataset_versions`;
-const datasetSelect = `SELECT id,name,slug,current_version_id AS "currentVersionId",archived_at::text AS "archivedAt",created_at::text AS "createdAt" FROM datasets`;
+
+/**
+ * Ejecuta una acción dentro del contexto de cuenta y tenant si `actor.accountId` está disponible,
+ * o solo a nivel tenant en caso contrario.
+ */
+function execute<T>(pool: Pool, actor: DataActor, action: (client: PoolClient) => Promise<T>): Promise<T> {
+  if (actor.accountId) {
+    return withAccount(pool, actor.tenantId, actor.accountId, action);
+  }
+  return withTenant(pool, actor.tenantId, action);
+}
+
+export const versionSelect = `SELECT id,account_id AS "accountId",dataset_id AS "datasetId",number,filename,bytes::int,regional,state,sha256,profile,mapping,row_count::float8 AS rows,issues,issue_count AS "issueCount",error_code AS "errorCode",published_at::text AS "publishedAt",created_at::text AS "createdAt",progress FROM dataset_versions`;
+const datasetSelect = `SELECT id,account_id AS "accountId",name,slug,current_version_id AS "currentVersionId",archived_at::text AS "archivedAt",created_at::text AS "createdAt" FROM datasets`;
 
 /**
  * Busca y valida el registro de una versión de dataset por su ID.
@@ -73,13 +85,20 @@ export class IngestionService {
   async list(actor: DataActor, includeArchived = false) {
     permit(actor, 'dataset.read');
     const where = includeArchived ? '' : 'WHERE archived_at IS NULL';
-    return withTenant(this.pool, actor.tenantId, async client => datasetListSchema.parse({ items: (await client.query(`${datasetSelect} ${where} ORDER BY created_at DESC LIMIT 100`)).rows }));
+    return execute(this.pool, actor, async client => datasetListSchema.parse({ items: (await client.query(`${datasetSelect} ${where} ORDER BY created_at DESC LIMIT 100`)).rows }));
   }
+
   async create(actor: DataActor, body: unknown, key: string, correlation: string) {
-    permit(actor, 'dataset.manage'); const input = datasetCreateSchema.parse(body); z.uuid().parse(key);
+    permit(actor, 'dataset.manage');
+    if (!actor.accountId) throw new DomainError('ACCOUNT_REQUIRED', 400, 'Se requiere una cuenta activa para crear datasets.');
+    const input = datasetCreateSchema.parse(body);
+    z.uuid().parse(key);
     try {
-      return await withTenant(this.pool, actor.tenantId, async client => {
-        const added = await client.query('INSERT INTO datasets(tenant_id,name,slug,creation_key) VALUES ($1,$2,$3,$4) ON CONFLICT(tenant_id,creation_key) DO NOTHING RETURNING id', [actor.tenantId, input.name, input.slug, key]);
+      return await execute(this.pool, actor, async client => {
+        const added = await client.query(
+          'INSERT INTO datasets(tenant_id,account_id,name,slug,creation_key) VALUES ($1,$2,$3,$4,$5) ON CONFLICT(tenant_id,creation_key) DO NOTHING RETURNING id',
+          [actor.tenantId, actor.accountId, input.name, input.slug, key]
+        );
         const result = datasetSchema.parse((await client.query(`${datasetSelect} WHERE creation_key=$1`, [key])).rows[0]);
         if (result.name !== input.name || result.slug !== input.slug) throw new DomainError('IDEMPOTENCY_CONFLICT', 409, 'Esta solicitud ya se utilizó con otros datos.');
         if (added.rowCount) await audit(client, actor, 'dataset.created', result.id, correlation);
@@ -90,44 +109,70 @@ export class IngestionService {
       throw error;
     }
   }
+
   async versions(actor: DataActor, datasetId: string) {
-    permit(actor, 'dataset.read'); z.uuid().parse(datasetId);
-    return withTenant(this.pool, actor.tenantId, async client => {
+    permit(actor, 'dataset.read');
+    z.uuid().parse(datasetId);
+    return execute(this.pool, actor, async client => {
       if (!(await client.query('SELECT 1 FROM datasets WHERE id=$1', [datasetId])).rowCount) throw new DomainError('DATASET_NOT_FOUND', 404, 'Dataset no encontrado.');
       return versionListSchema.parse({ items: (await client.query(`${versionSelect} WHERE dataset_id=$1 ORDER BY number DESC LIMIT 100`, [datasetId])).rows });
     });
   }
-  async get(actor: DataActor, id: string) { permit(actor, 'dataset.read'); return withTenant(this.pool, actor.tenantId, client => findVersion(client, id)); }
+
+  async get(actor: DataActor, id: string) {
+    permit(actor, 'dataset.read');
+    return execute(this.pool, actor, client => findVersion(client, id));
+  }
+
   async upload(actor: DataActor, datasetId: string, body: unknown, key: string, correlation: string) {
-    permit(actor, 'dataset.manage'); z.uuid().parse(datasetId); z.uuid().parse(key); const input = uploadCreateSchema.parse(body);
-    const result = await withTenant(this.pool, actor.tenantId, async client => {
-      const dataset = await client.query<{ current_version_id: string | null; archived_at: string | null }>('SELECT current_version_id, archived_at FROM datasets WHERE id=$1 FOR UPDATE', [datasetId]);
+    permit(actor, 'dataset.manage');
+    z.uuid().parse(datasetId);
+    z.uuid().parse(key);
+    const input = uploadCreateSchema.parse(body);
+    const result = await execute(this.pool, actor, async client => {
+      const dataset = await client.query<{ account_id: string; current_version_id: string | null; archived_at: string | null }>(
+        'SELECT account_id, current_version_id, archived_at FROM datasets WHERE id=$1 FOR UPDATE',
+        [datasetId]
+      );
       if (!dataset.rows[0]) throw new DomainError('DATASET_NOT_FOUND', 404, 'Dataset no encontrado.');
       if (dataset.rows[0].archived_at) throw new DomainError('DATASET_ARCHIVED', 400, 'No se pueden cargar archivos en un dataset archivado.');
-      const previous = await client.query<{ id: string; object_key: string; regional: unknown }>('SELECT id,object_key,regional FROM dataset_versions WHERE dataset_id=$1 AND creation_key=$2', [datasetId, key]);
+      const accountId = dataset.rows[0].account_id;
+
+      const previous = await client.query<{ id: string; object_key: string; regional: unknown }>(
+        'SELECT id,object_key,regional FROM dataset_versions WHERE dataset_id=$1 AND creation_key=$2',
+        [datasetId, key]
+      );
       if (previous.rows[0]) {
         const version = await findVersion(client, previous.rows[0].id);
         if (version.filename !== input.filename || version.bytes !== input.bytes || JSON.stringify(previous.rows[0].regional) !== JSON.stringify(input.regional)) {
-          // JSONB key order is not a contract; compare normalized property values below.
           const old = previous.rows[0].regional as Record<string, unknown>;
-          if (version.filename !== input.filename || version.bytes !== input.bytes || Object.entries(input.regional).some(([key, value]) => old[key] !== value)) throw new DomainError('IDEMPOTENCY_CONFLICT', 409, 'Esta solicitud ya se utilizó con otros datos.');
+          if (version.filename !== input.filename || version.bytes !== input.bytes || Object.entries(input.regional).some(([k, value]) => old[k] !== value)) {
+            throw new DomainError('IDEMPOTENCY_CONFLICT', 409, 'Esta solicitud ya se utilizó con otros datos.');
+          }
         }
         if (version.state !== 'uploaded') throw new DomainError('UPLOAD_ALREADY_CONFIRMED', 409, 'El archivo ya fue confirmado. Consulta su versión.');
         return { version, objectKey: previous.rows[0].object_key };
       }
       const id = crypto.randomUUID(), objectKey = `${actor.tenantId}/${datasetId}/${id}/original`;
-      await client.query(`INSERT INTO dataset_versions(id,tenant_id,dataset_id,number,actor_id,filename,bytes,format,object_key,regional,base_version_id,creation_key)
-        VALUES ($1,$2,$3,(SELECT COALESCE(MAX(number),0)+1 FROM dataset_versions WHERE dataset_id=$3),$4,$5,$6,$7,$8,$9,$10,$11)`, [id, actor.tenantId, datasetId, actor.userId, input.filename, input.bytes, input.format, objectKey, input.regional, dataset.rows[0].current_version_id, key]);
+      await client.query(`INSERT INTO dataset_versions(id,tenant_id,account_id,dataset_id,number,actor_id,filename,bytes,format,object_key,regional,base_version_id,creation_key)
+        VALUES ($1,$2,$3,$4,(SELECT COALESCE(MAX(number),0)+1 FROM dataset_versions WHERE dataset_id=$4),$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [id, actor.tenantId, accountId, datasetId, actor.userId, input.filename, input.bytes, input.format, objectKey, input.regional, dataset.rows[0].current_version_id, key]);
       await audit(client, actor, 'upload.created', id, correlation);
       return { version: await findVersion(client, id), objectKey };
     });
     return uploadResultSchema.parse({ version: result.version, uploadUrl: await this.storage.uploadUrl(result.objectKey, result.version.bytes) });
   }
+
   async confirm(actor: DataActor, id: string) {
-    permit(actor, 'dataset.manage'); z.uuid().parse(id);
-    await withTenant(this.pool, actor.tenantId, async client => {
-      const result = await client.query<{ state: string; object_key: string; object_version: string | null; bytes: string }>('SELECT state,object_key,object_version,bytes FROM dataset_versions WHERE id=$1 FOR UPDATE', [id]);
-      const row = result.rows[0]; if (!row) throw new DomainError('VERSION_NOT_FOUND', 404, 'Versión no encontrada.');
+    permit(actor, 'dataset.manage');
+    z.uuid().parse(id);
+    await execute(this.pool, actor, async client => {
+      const result = await client.query<{ state: string; object_key: string; object_version: string | null; bytes: string }>(
+        'SELECT state,object_key,object_version,bytes FROM dataset_versions WHERE id=$1 FOR UPDATE',
+        [id]
+      );
+      const row = result.rows[0];
+      if (!row) throw new DomainError('VERSION_NOT_FOUND', 404, 'Versión no encontrada.');
       if (row.state !== 'uploaded' && row.state !== 'profiling') throw new DomainError('INVALID_IMPORT_STATE', 409, 'La versión ya avanzó a otro paso.');
       if (!row.object_version) {
         let head;
@@ -139,20 +184,25 @@ export class IngestionService {
     await this.jobs.enqueue({ tenantId: actor.tenantId, actorId: actor.userId, versionId: id, action: 'profile' });
     return this.get(actor, id);
   }
+
   async retryProfile(actor: DataActor, id: string) {
-    permit(actor, 'dataset.manage'); z.uuid().parse(id);
-    await withTenant(this.pool, actor.tenantId, async client => {
+    permit(actor, 'dataset.manage');
+    z.uuid().parse(id);
+    await execute(this.pool, actor, async client => {
       const result = await client.query<{ state: string; mapping: unknown }>('SELECT state,mapping FROM dataset_versions WHERE id=$1 FOR UPDATE', [id]);
-      const row = result.rows[0]; if (!row) throw new DomainError('VERSION_NOT_FOUND', 404, 'Versión no encontrada.');
+      const row = result.rows[0];
+      if (!row) throw new DomainError('VERSION_NOT_FOUND', 404, 'Versión no encontrada.');
       if (!['failed', 'cancelled', 'profiling'].includes(row.state) || row.mapping) throw new DomainError('INVALID_IMPORT_STATE', 409, 'Esta versión no puede reanalizarse.');
       await client.query("UPDATE dataset_versions SET state='profiling',error_code=NULL,progress=0 WHERE id=$1", [id]);
     });
     await this.jobs.enqueue({ tenantId: actor.tenantId, actorId: actor.userId, versionId: id, action: 'profile' });
     return this.get(actor, id);
   }
+
   async map(actor: DataActor, id: string, body: unknown) {
-    permit(actor, 'dataset.manage'); const mapping = mappingSchema.parse(body);
-    await withTenant(this.pool, actor.tenantId, async client => {
+    permit(actor, 'dataset.manage');
+    const mapping = mappingSchema.parse(body);
+    await execute(this.pool, actor, async client => {
       await client.query('SELECT id FROM dataset_versions WHERE id=$1 FOR UPDATE', [z.uuid().parse(id)]);
       const version = await findVersion(client, id);
       if (!['awaiting_mapping', 'failed', 'validating'].includes(version.state) || version.publishedAt) throw new DomainError('INVALID_IMPORT_STATE', 409, 'Esta versión no admite cambios de mapeo.');
@@ -167,17 +217,26 @@ export class IngestionService {
     await this.jobs.enqueue({ tenantId: actor.tenantId, actorId: actor.userId, versionId: id, action: 'import' });
     return this.get(actor, id);
   }
+
   async cancel(actor: DataActor, id: string, correlation: string) {
-    permit(actor, 'dataset.manage'); z.uuid().parse(id);
-    await withTenant(this.pool, actor.tenantId, async client => {
+    permit(actor, 'dataset.manage');
+    z.uuid().parse(id);
+    await execute(this.pool, actor, async client => {
       const changed = await client.query("UPDATE dataset_versions SET state='cancelled' WHERE id=$1 AND published_at IS NULL AND state <> 'cancelled' RETURNING id", [id]);
       if (changed.rowCount) await audit(client, actor, 'import.cancelled', id, correlation);
-      else { const version = await findVersion(client, id); if (version.publishedAt) throw new DomainError('PUBLISHED_VERSION_IMMUTABLE',409,'Una versión publicada no se puede cancelar.'); }
-    }); return this.get(actor, id);
+      else {
+        const version = await findVersion(client, id);
+        if (version.publishedAt) throw new DomainError('PUBLISHED_VERSION_IMMUTABLE', 409, 'Una versión publicada no se puede cancelar.');
+      }
+    });
+    return this.get(actor, id);
   }
+
   async publish(actor: DataActor, id: string, key: string, correlation: string, restore = false) {
-    permit(actor, 'dataset.manage'); z.uuid().parse(id); z.uuid().parse(key);
-    return withTenant(this.pool, actor.tenantId, async client => {
+    permit(actor, 'dataset.manage');
+    z.uuid().parse(id);
+    z.uuid().parse(key);
+    return execute(this.pool, actor, async client => {
       const version = await findVersion(client, id);
       const current = await client.query<{ current_version_id: string | null }>('SELECT current_version_id FROM datasets WHERE id=$1 FOR UPDATE', [version.datasetId]);
       const existing = await client.query<{ version_id: string }>('SELECT version_id FROM dataset_publications WHERE dataset_id=$1 AND creation_key=$2', [version.datasetId, key]);
@@ -190,7 +249,7 @@ export class IngestionService {
       const isSkippedPolicy = fresh.mapping?.errorPolicy === 'skip';
       const hasBlockingIssues = fresh.issueCount > 0 && !isSkippedPolicy;
       if (fresh.state !== 'ready' || hasBlockingIssues || !fresh.mapping || !fresh.sha256 || (restore && !fresh.publishedAt)) throw new DomainError('VERSION_NOT_READY', 409, 'La versión debe estar validada y sin errores bloqueantes.');
-      if (!restore && fresh.publishedAt && current.rows[0]?.current_version_id !== id) throw new DomainError('RESTORE_REQUIRED',409,'Usa restaurar para volver a una versión histórica.');
+      if (!restore && fresh.publishedAt && current.rows[0]?.current_version_id !== id) throw new DomainError('RESTORE_REQUIRED', 409, 'Usa restaurar para volver a una versión histórica.');
       const base = await client.query<{ base_version_id: string | null }>('SELECT base_version_id FROM dataset_versions WHERE id=$1', [id]);
       if (!restore && !fresh.publishedAt && base.rows[0]?.base_version_id !== current.rows[0]?.current_version_id) throw new DomainError('BASE_VERSION_CHANGED', 409, 'Otra versión se publicó durante esta carga. Inicia una carga sobre la versión vigente.');
       if (!fresh.publishedAt) await client.query('UPDATE dataset_versions SET published_at=now() WHERE id=$1', [id]);
@@ -200,33 +259,37 @@ export class IngestionService {
       return findVersion(client, id);
     });
   }
+
   async preview(actor: DataActor, id: string) {
     permit(actor, 'dataset.read');
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       const version = await findVersion(client, id);
       const rows = await client.query('SELECT values FROM dataset_rows WHERE version_id=$1 ORDER BY row_number LIMIT 50', [id]);
       return dataPreviewSchema.parse({ fields: version.mapping?.fields ?? [], rows: rows.rows.map(row => row.values) });
     });
   }
+
   async source(client: PoolClient, id: string) {
     const version = await findVersion(client, id);
     if (!version.publishedAt || !version.mapping || version.state !== 'ready') throw new DomainError('PUBLISHED_VERSION_REQUIRED', 409, 'Selecciona una versión publicada.');
     const dataset = datasetSchema.parse((await client.query(`${datasetSelect} WHERE id=$1`, [version.datasetId])).rows[0]);
     return { version, dataset, relation: '(SELECT values FROM dataset_rows WHERE version_id = $1::uuid)', parameters: [id] };
   }
+
   async issues(actor: DataActor, id: string) {
     permit(actor, 'dataset.read');
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       const version = await findVersion(client, id);
       const rows = await client.query('SELECT source_row::float8 AS row,field,code FROM dataset_issues WHERE version_id=$1 ORDER BY ordinal LIMIT 11000', [id]);
       return issueReportSchema.parse({ items: rows.rows, complete: version.errorCode !== 'ISSUE_LIMIT' });
     });
   }
+
   async deleteOrArchive(actor: DataActor, datasetId: string, correlation: string) {
     permit(actor, 'dataset.manage');
     z.uuid().parse(datasetId);
 
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       const datasetRow = (await client.query<{ id: string; archived_at: string | null }>('SELECT id, archived_at FROM datasets WHERE id=$1 FOR UPDATE', [datasetId])).rows[0];
       if (!datasetRow) throw new DomainError('DATASET_NOT_FOUND', 404, 'Dataset no encontrado.');
 
@@ -278,10 +341,10 @@ export class IngestionService {
       await client.query('DELETE FROM dataset_versions WHERE dataset_id = $1', [datasetId]);
       await client.query('DELETE FROM datasets WHERE id = $1', [datasetId]);
 
-      // Delete binary objects in storage (best-effort)
+      // Delete binary objects in storage with complete version/marker purge
       for (const key of objectKeys) {
         try {
-          await this.storage.delete(key);
+          await this.storage.purge(key);
         } catch {}
       }
 
@@ -289,11 +352,12 @@ export class IngestionService {
       return { action: 'deleted' as const, id: datasetId };
     });
   }
+
   async unarchive(actor: DataActor, datasetId: string, correlation: string) {
     permit(actor, 'dataset.manage');
     z.uuid().parse(datasetId);
 
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       const datasetRow = (await client.query<{ id: string; archived_at: string | null }>('SELECT id, archived_at FROM datasets WHERE id=$1 FOR UPDATE', [datasetId])).rows[0];
       if (!datasetRow) throw new DomainError('DATASET_NOT_FOUND', 404, 'Dataset no encontrado.');
       if (!datasetRow.archived_at) return { action: 'unarchived' as const, id: datasetId };
@@ -304,3 +368,4 @@ export class IngestionService {
     });
   }
 }
+

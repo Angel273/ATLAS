@@ -9,7 +9,7 @@
 
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { createPool, withTenant, type PoolClient } from '@atlas/database';
+import { createPool, withTenant, withAccount, type Pool, type PoolClient } from '@atlas/database';
 import {
   DomainError,
   kpiCreateSchema,
@@ -30,15 +30,50 @@ import { resolveJoinPaths, detectKpiCycles, evaluateTarget, type RelationshipRec
 export { parseFormula, compileFormula, extractReferencedTables } from './dsl.js';
 export { resolveJoinPaths, detectKpiCycles, evaluateTarget } from './relations.js';
 
-const select = `SELECT id, name, slug, description, number, model_version_id AS "modelVersionId", dataset_version_id AS "datasetVersionId", formula, unit, precision, dimensions, target_direction AS "targetDirection", targets, dependencies, COALESCE(workforce_mapping, '{"enabled": false, "matchKey": "code", "datasetField": "", "selectedColumns": []}'::jsonb) AS "workforceMapping", deprecated_at::text AS "deprecatedAt", published_at::text AS "publishedAt", created_at::text AS "createdAt" FROM kpi_versions`;
-const relSelect = `SELECT id, from_dataset_id AS "fromDatasetId", from_field AS "fromField", to_dataset_id AS "toDatasetId", to_field AS "toField", cardinality, join_type AS "joinType", is_preferred AS "isPreferred", published_at::text AS "publishedAt", created_at::text AS "createdAt" FROM semantic_relationships`;
+class LruCache<K, V> {
+  private readonly map = new Map<K, V>();
+  constructor(private readonly maxEntries: number = 500) {}
+
+  get(key: K): V | undefined {
+    const item = this.map.get(key);
+    if (item !== undefined) {
+      this.map.delete(key);
+      this.map.set(key, item);
+    }
+    return item;
+  }
+
+  set(key: K, value: V): void {
+    if (this.map.has(key)) {
+      this.map.delete(key);
+    } else if (this.map.size >= this.maxEntries) {
+      const firstKey = this.map.keys().next().value;
+      if (firstKey !== undefined) this.map.delete(firstKey);
+    }
+    this.map.set(key, value);
+  }
+
+  clear(): void {
+    this.map.clear();
+  }
+}
+
+function execute<T>(pool: Pool, actor: DataActor, action: (client: PoolClient) => Promise<T>): Promise<T> {
+  if (actor.accountId) {
+    return withAccount(pool, actor.tenantId, actor.accountId, action);
+  }
+  return withTenant(pool, actor.tenantId, action);
+}
+
+const select = `SELECT id, account_id AS "accountId", name, slug, description, number, model_version_id AS "modelVersionId", dataset_version_id AS "datasetVersionId", formula, unit, precision, dimensions, target_direction AS "targetDirection", targets, dependencies, COALESCE(workforce_mapping, '{"enabled": false, "matchKey": "code", "datasetField": "", "selectedColumns": []}'::jsonb) AS "workforceMapping", deprecated_at::text AS "deprecatedAt", published_at::text AS "publishedAt", created_at::text AS "createdAt" FROM kpi_versions`;
+const relSelect = `SELECT id, account_id AS "accountId", from_dataset_id AS "fromDatasetId", from_field AS "fromField", to_dataset_id AS "toDatasetId", to_field AS "toField", cardinality, join_type AS "joinType", is_preferred AS "isPreferred", published_at::text AS "publishedAt", created_at::text AS "createdAt" FROM semantic_relationships`;
 
 /**
  * Servicio central para el catálogo de métricas, relaciones semánticas y ejecución de consultas.
  */
 export class KpiService {
   readonly pool = createPool(process.env.DATABASE_URL);
-  private readonly queryCache = new Map<string, { result: z.infer<typeof queryResultSchema>; expiresAt: number }>();
+  private readonly queryCache = new LruCache<string, { result: z.infer<typeof queryResultSchema>; expiresAt: number }>(500);
 
   constructor(private readonly ingestion: IngestionService) {}
 
@@ -53,15 +88,14 @@ export class KpiService {
   // --- Semantic Relationships ---
 
   /**
-   * Obtiene la lista de relaciones semánticas publicadas en el tenant autenticado.
+   * Obtiene la lista de relaciones semánticas publicadas en el tenant y cuenta autenticados.
    *
    * @param actor Contexto del usuario autenticado con capacidades.
    * @returns Lista de relaciones semánticas validadas.
    */
   async listRelationships(actor: DataActor) {
-
     permit(actor, 'semantic.read');
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       const rows = (await client.query(`${relSelect} ORDER BY created_at DESC LIMIT 100`)).rows;
       return semanticRelationshipListSchema.parse({ items: rows });
     });
@@ -69,7 +103,7 @@ export class KpiService {
 
   /**
    * Crea una relación semántica entre dos datasets publicados con cardinalidad y tipo de JOIN definidos.
-   * Valida existencia de datasets, versiones vigentes y existencia de columnas clave.
+   * Valida existencia de datasets, pertenencia a la misma cuenta, versiones vigentes y columnas clave.
    *
    * @param actor Contexto del usuario con capacidad `semantic.manage`.
    * @param body Payload con la definición de la relación semántica.
@@ -81,7 +115,7 @@ export class KpiService {
     const input = semanticRelationshipCreateSchema.parse(body);
     z.uuid().parse(key);
 
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       const previous = (await client.query(`${relSelect} WHERE creation_key = $1`, [key])).rows[0];
       if (previous) return semanticRelationshipSchema.parse(previous);
 
@@ -89,17 +123,23 @@ export class KpiService {
         throw new DomainError('INVALID_RELATIONSHIP', 400, 'Una relación debe conectar dos datasets distintos.');
       }
 
-      const fromDs = (await client.query<{ id: string; current_version_id: string | null }>(
-        'SELECT id, current_version_id FROM datasets WHERE id = $1',
+      const fromDs = (await client.query<{ id: string; account_id: string; current_version_id: string | null }>(
+        'SELECT id, account_id, current_version_id FROM datasets WHERE id = $1',
         [input.fromDatasetId]
       )).rows[0];
-      const toDs = (await client.query<{ id: string; current_version_id: string | null }>(
-        'SELECT id, current_version_id FROM datasets WHERE id = $1',
+      const toDs = (await client.query<{ id: string; account_id: string; current_version_id: string | null }>(
+        'SELECT id, account_id, current_version_id FROM datasets WHERE id = $1',
         [input.toDatasetId]
       )).rows[0];
 
       if (!fromDs || !toDs) {
         throw new DomainError('DATASET_NOT_FOUND', 404, 'Dataset de origen o destino no encontrado.');
+      }
+      if (fromDs.account_id !== toDs.account_id) {
+        throw new DomainError('INVALID_RELATIONSHIP', 400, 'Los datasets deben pertenecer a la misma cuenta.');
+      }
+      if (actor.accountId && actor.accountId !== fromDs.account_id) {
+        throw new DomainError('FORBIDDEN', 403, 'Los datasets no pertenecen a la cuenta activa.');
       }
       if (!fromDs.current_version_id || !toDs.current_version_id) {
         throw new DomainError('VERSION_NOT_READY', 400, 'Ambos datasets deben tener una versión publicada vigente.');
@@ -124,12 +164,12 @@ export class KpiService {
 
       const result = await client.query<{ id: string }>(
         `INSERT INTO semantic_relationships (
-          tenant_id, from_dataset_id, from_field, to_dataset_id, to_field,
+          tenant_id, account_id, from_dataset_id, from_field, to_dataset_id, to_field,
           cardinality, join_type, is_preferred, creation_key
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         RETURNING id`,
         [
-          actor.tenantId, input.fromDatasetId, input.fromField,
+          actor.tenantId, fromDs.account_id, input.fromDatasetId, input.fromField,
           input.toDatasetId, input.toField, input.cardinality,
           input.joinType, input.isPreferred, key
         ]
@@ -146,16 +186,15 @@ export class KpiService {
   // --- KPIs ---
 
   /**
-   * Lista los KPIs gobernados disponibles para el tenant actual.
+   * Lista los KPIs gobernados disponibles para el tenant y cuenta actual.
    * Filtra borradores salvo para usuarios con permisos administrativos `semantic.manage`.
    *
    * @param actor Contexto del usuario solicitante.
    * @param includeDeprecated Si es true, incluye métricas que han sido deprecadas.
    */
   async list(actor: DataActor, includeDeprecated = false) {
-
     permit(actor, 'semantic.read');
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       const conditions: string[] = [];
       if (!actor.capabilities.includes('semantic.manage')) {
         conditions.push('published_at IS NOT NULL');
@@ -193,13 +232,12 @@ export class KpiService {
    * @param correlation Correlation ID para auditoría.
    */
   async create(actor: DataActor, body: unknown, key: string, correlation: string) {
-
     permit(actor, 'semantic.manage');
     const input = kpiCreateSchema.parse(body);
     z.uuid().parse(key);
 
-    return withTenant(this.pool, actor.tenantId, async client => {
-      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${actor.tenantId}:${input.slug}`]);
+    return execute(this.pool, actor, async client => {
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${actor.tenantId}:${actor.accountId ?? ''}:${input.slug}`]);
       const previous = (await client.query('SELECT id FROM kpi_versions WHERE creation_key = $1', [key])).rows[0];
       if (previous) {
         const old = await this.get(client, String(previous.id));
@@ -229,6 +267,11 @@ export class KpiService {
       if (source.dataset.archivedAt) {
         throw new DomainError('DATASET_ARCHIVED', 400, 'No se pueden crear KPIs sobre un dataset archivado.');
       }
+      const accountId = actor.accountId || source.dataset.accountId;
+      if (!accountId) {
+        throw new DomainError('ACCOUNT_REQUIRED', 400, 'Se requiere una cuenta activa para crear KPIs.');
+      }
+
       const tables: TableContext[] = [
         { slug: source.dataset.slug, alias: 'source', fields: source.version.mapping!.fields }
       ];
@@ -281,8 +324,8 @@ export class KpiService {
       compileFormula(ast, tables, source.dataset.slug, [input.datasetVersionId]);
 
       await client.query(
-        'INSERT INTO semantic_model_versions(tenant_id, dataset_version_id, fields) VALUES ($1, $2, $3) ON CONFLICT(tenant_id, dataset_version_id) DO NOTHING',
-        [actor.tenantId, input.datasetVersionId, JSON.stringify(source.version.mapping!.fields)]
+        'INSERT INTO semantic_model_versions(tenant_id, account_id, dataset_version_id, fields) VALUES ($1, $2, $3, $4) ON CONFLICT(tenant_id, dataset_version_id) DO NOTHING',
+        [actor.tenantId, accountId, input.datasetVersionId, JSON.stringify(source.version.mapping!.fields)]
       );
       const model = (await client.query<{ id: string }>(
         'SELECT id FROM semantic_model_versions WHERE dataset_version_id = $1',
@@ -291,15 +334,15 @@ export class KpiService {
 
       const result = await client.query<{ id: string }>(
         `INSERT INTO kpi_versions(
-          tenant_id, slug, number, name, description, model_version_id, dataset_version_id,
+          tenant_id, account_id, slug, number, name, description, model_version_id, dataset_version_id,
           formula, ast, unit, precision, dimensions, target_direction, targets, dependencies,
           workforce_mapping, actor_id, creation_key
         ) VALUES (
-          $1, $2::varchar, (SELECT COALESCE(MAX(number), 0) + 1 FROM kpi_versions WHERE slug = $2::varchar),
-          $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+          $1, $2, $3::varchar, (SELECT COALESCE(MAX(number), 0) + 1 FROM kpi_versions WHERE slug = $3::varchar AND account_id = $2),
+          $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
         ) RETURNING id`,
         [
-          actor.tenantId, input.slug, input.name, input.description, model.id, input.datasetVersionId,
+          actor.tenantId, accountId, input.slug, input.name, input.description, model.id, input.datasetVersionId,
           input.formula, ast, input.unit, input.precision, JSON.stringify(input.dimensions),
           input.targetDirection, JSON.stringify(input.targets), JSON.stringify(input.dependencies),
           JSON.stringify(input.workforceMapping ?? { enabled: false, matchKey: 'code', datasetField: '', selectedColumns: [] }),
@@ -323,7 +366,7 @@ export class KpiService {
    */
   async publish(actor: DataActor, id: string, correlation: string) {
     permit(actor, 'semantic.publish');
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       await client.query('SELECT id FROM kpi_versions WHERE id = $1 FOR UPDATE', [z.uuid().parse(id)]);
       const kpi = await this.get(client, id);
       if (!kpi.publishedAt) {
@@ -345,7 +388,7 @@ export class KpiService {
    */
   async deprecate(actor: DataActor, id: string, correlation: string) {
     permit(actor, 'semantic.publish');
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       await client.query('SELECT id FROM kpi_versions WHERE id = $1 FOR UPDATE', [z.uuid().parse(id)]);
       const kpi = await this.get(client, id);
       if (!kpi.publishedAt) {
@@ -371,7 +414,7 @@ export class KpiService {
    */
   async deleteOrDeprecate(actor: DataActor, id: string, correlation: string) {
     permit(actor, 'semantic.manage');
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       await client.query('SELECT id FROM kpi_versions WHERE id = $1 FOR UPDATE', [z.uuid().parse(id)]);
       const kpi = await this.get(client, id);
 
@@ -408,22 +451,30 @@ export class KpiService {
    * @param correlation ID de correlación para auditoría.
    */
   async query(actor: DataActor, body: unknown, correlation: string) {
-
     permit(actor, 'semantic.read');
     const input = querySchema.parse(body);
 
-    const cacheKey = `${actor.tenantId}:${input.kpiVersionId}:${JSON.stringify(input)}`;
+    const cacheKey = `${actor.tenantId}:${actor.accountId ?? 'all'}:${input.kpiVersionId}:${JSON.stringify(input)}`;
     const cached = this.queryCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
       return { ...cached.result, cacheHit: true };
     }
 
     try {
-      return await withTenant(this.pool, actor.tenantId, async client => {
+      return await execute(this.pool, actor, async client => {
         const kpi = await this.get(client, input.kpiVersionId);
         if (!kpi.publishedAt && !actor.capabilities.includes('semantic.manage')) {
           throw new DomainError('KPI_NOT_FOUND', 404, 'KPI no encontrado.');
         }
+
+        const usesWorkforce = (kpi.workforceMapping?.enabled && kpi.workforceMapping?.datasetField) ||
+          input.dimensions.some(d => d.startsWith('workforce.') || ['supervisor', 'floor_manager', 'fm', 'wave', 'tenure', 'team', 'bms_id', 'agent_name', 'agent_code', 'week'].includes(d.toLowerCase())) ||
+          input.filters.some(f => f.field.startsWith('workforce.') || ['supervisor', 'floor_manager', 'fm', 'wave', 'tenure', 'team', 'bms_id', 'agent_name', 'agent_code', 'week'].includes(f.field.toLowerCase()));
+
+        if (usesWorkforce) {
+          permit(actor, 'workforce.read');
+        }
+
         const result = await this.execute(client, input);
         await audit(client, actor, 'kpi.queried', kpi.id, correlation);
 

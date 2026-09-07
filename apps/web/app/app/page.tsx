@@ -54,13 +54,18 @@ export default function OrganizationPage() {
     async function load() {
       try {
         const session = await api('/auth/session', sessionSchema);
-        const data = await api('/accounts', accountListSchema);
-        if (!cancelled) { setSession(session); setAccounts(data.items); }
-      } catch (error) { if (!cancelled) setError(error instanceof Error ? error.message : 'No se pudo cargar la organización.'); }
-      finally { if (!cancelled) setLoading(false); }
+        if (cancelled) return;
+        if (session.accountId) {
+          router.replace(`/app/accounts/${session.accountId}/datasets`);
+          return;
+        }
+        router.replace('/portal/accounts');
+      } catch (error) {
+        if (!cancelled) router.replace('/login');
+      }
     }
     void load(); return () => { cancelled = true; };
-  }, []);
+  }, [router]);
 
   /** Cierra la sesión activa o revoca todas las sesiones del usuario. */
   async function logout(all = false) {

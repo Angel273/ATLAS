@@ -1,17 +1,18 @@
 /**
  * @file apps/api/src/workforce/workforce.service.ts
  * @description Servicio transaccional de Workforce / Agent Definer en ATLAS (@atlas/api).
- * Modela el catálogo integral del personal operativo de call center:
+ * Modela el catálogo integral del personal operativo de call center exclusivo por cuenta:
  * - Semanas operativas lunes-domingo (`workforce_weeks`, formato ISO YYYY-Www).
  * - Tipos de contrato y roles laborales (`employee_types`).
  * - Empleados (código único de agente, BMS ID, Wave, metadatos JSONB).
  * - Equipos de trabajo (`teams`) y asignaciones temporales con vigencia (`valid_from`, `valid_to`).
  * - Jerarquías de supervisión y mentoría (`employee_relationships`).
- * - Importador masivo de Rosters Excel con reconciliación automática multi-hoja y descarga de plantillas.
+ * - Rosters congelados e inmutables por semana (`workforce_roster_versions`, `workforce_roster_entries`).
+ * - Importador masivo de Rosters Excel con reconciliación automática multi-hoja y clonación entre semanas.
  */
 
 import { z } from 'zod';
-import { createPool, withTenant, type PoolClient, type Pool } from '@atlas/database';
+import { createPool, withTenant, withAccount, type PoolClient, type Pool } from '@atlas/database';
 import {
   DomainError,
   employeeTypeSchema,
@@ -43,9 +44,6 @@ import { parseRosterFile, generateTeamTemplateXlsx } from './excel-roster.js';
 
 /**
  * Convierte un nombre arbitrario de equipo en un slug SQL compatible en minúsculas y sin acentos.
- *
- * @param name Nombre del equipo.
- * @returns Slug sanitizado.
  */
 function slugify(name: string): string {
   let s = name
@@ -61,6 +59,16 @@ function slugify(name: string): string {
 }
 
 /**
+ * Ejecuta una transacción en PostgreSQL estableciendo tanto tenant_id como account_id si está presente.
+ */
+function execute<T>(pool: Pool, actor: DataActor, action: (client: PoolClient) => Promise<T>): Promise<T> {
+  if (actor.accountId) {
+    return withAccount(pool, actor.tenantId, actor.accountId, action);
+  }
+  return withTenant(pool, actor.tenantId, action);
+}
+
+/**
  * Servicio central para la gestión del personal operativo, equipos, jerarquías y semanas operativas.
  */
 export class WorkforceService {
@@ -70,14 +78,13 @@ export class WorkforceService {
     await this.pool.end();
   }
 
-
   // --- Workforce Weeks ---
 
   async listWeeks(actor: DataActor, options: { yearNumber?: number | undefined; status?: string | undefined } = {}) {
     permit(actor, 'workforce.read');
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       let query = `
-        SELECT id, week_code AS "weekCode", year_number AS "yearNumber", week_number AS "weekNumber",
+        SELECT id, account_id AS "accountId", week_code AS "weekCode", year_number AS "yearNumber", week_number AS "weekNumber",
                start_date::text AS "startDate", end_date::text AS "endDate", status,
                COALESCE(custom_attributes, '{}'::jsonb) AS "customAttributes", created_at::text AS "createdAt"
         FROM workforce_weeks
@@ -105,9 +112,9 @@ export class WorkforceService {
 
   async getCurrentWeek(actor: DataActor) {
     permit(actor, 'workforce.read');
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       const row = (await client.query(
-        `SELECT id, week_code AS "weekCode", year_number AS "yearNumber", week_number AS "weekNumber",
+        `SELECT id, account_id AS "accountId", week_code AS "weekCode", year_number AS "yearNumber", week_number AS "weekNumber",
                 start_date::text AS "startDate", end_date::text AS "endDate", status,
                 COALESCE(custom_attributes, '{}'::jsonb) AS "customAttributes", created_at::text AS "createdAt"
          FROM workforce_weeks
@@ -120,19 +127,19 @@ export class WorkforceService {
 
   async createWeek(actor: DataActor, body: unknown, key: string, correlation: string) {
     permit(actor, 'workforce.manage');
+    if (!actor.accountId) throw new DomainError('ACCOUNT_REQUIRED', 400, 'Se requiere una cuenta activa para registrar semanas operativas.');
     const input = workforceWeekCreateSchema.parse(body);
 
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       const existing = (await client.query(
-        `SELECT id, week_code AS "weekCode", year_number AS "yearNumber", week_number AS "weekNumber",
+        `SELECT id, account_id AS "accountId", week_code AS "weekCode", year_number AS "yearNumber", week_number AS "weekNumber",
                 start_date::text AS "startDate", end_date::text AS "endDate", status,
                 COALESCE(custom_attributes, '{}'::jsonb) AS "customAttributes", created_at::text AS "createdAt"
-         FROM workforce_weeks WHERE week_code = $1`,
-        [input.weekCode]
+         FROM workforce_weeks WHERE week_code = $1 AND account_id = $2`,
+        [input.weekCode, actor.accountId]
       )).rows[0];
       if (existing) return workforceWeekSchema.parse(existing);
 
-      // Derive end date if not provided: exactly startDate + 6 days
       let endDate = input.endDate;
       if (!endDate) {
         const d = new Date(input.startDate + 'T00:00:00Z');
@@ -140,19 +147,19 @@ export class WorkforceService {
         endDate = d.toISOString().split('T')[0]!;
       }
 
-      // If status is 'current', demote previous 'current' to 'open'
       if (input.status === 'current') {
-        await client.query(`UPDATE workforce_weeks SET status = 'open' WHERE status = 'current'`);
+        await client.query(`UPDATE workforce_weeks SET status = 'open' WHERE status = 'current' AND account_id = $1`, [actor.accountId]);
       }
 
       const result = await client.query(
-        `INSERT INTO workforce_weeks(tenant_id, week_code, year_number, week_number, start_date, end_date, status, custom_attributes)
-         VALUES ($1, $2, $3, $4, $5::date, $6::date, $7, $8)
-         RETURNING id, week_code AS "weekCode", year_number AS "yearNumber", week_number AS "weekNumber",
+        `INSERT INTO workforce_weeks(tenant_id, account_id, week_code, year_number, week_number, start_date, end_date, status, custom_attributes)
+         VALUES ($1, $2, $3, $4, $5, $6::date, $7::date, $8, $9)
+         RETURNING id, account_id AS "accountId", week_code AS "weekCode", year_number AS "yearNumber", week_number AS "weekNumber",
                    start_date::text AS "startDate", end_date::text AS "endDate", status,
                    COALESCE(custom_attributes, '{}'::jsonb) AS "customAttributes", created_at::text AS "createdAt"`,
         [
           actor.tenantId,
+          actor.accountId,
           input.weekCode,
           input.yearNumber,
           input.weekNumber,
@@ -173,7 +180,7 @@ export class WorkforceService {
     const input = workforceWeekUpdateSchema.parse(body);
     const weekId = z.uuid().parse(id);
 
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       const current = (await client.query('SELECT id, status, custom_attributes FROM workforce_weeks WHERE id = $1', [weekId])).rows[0];
       if (!current) throw new DomainError('WEEK_NOT_FOUND', 404, 'Semana operativa no encontrada.');
 
@@ -188,7 +195,7 @@ export class WorkforceService {
         `UPDATE workforce_weeks
          SET status = $1, custom_attributes = $2
          WHERE id = $3
-         RETURNING id, week_code AS "weekCode", year_number AS "yearNumber", week_number AS "weekNumber",
+         RETURNING id, account_id AS "accountId", week_code AS "weekCode", year_number AS "yearNumber", week_number AS "weekNumber",
                    start_date::text AS "startDate", end_date::text AS "endDate", status,
                    COALESCE(custom_attributes, '{}'::jsonb) AS "customAttributes", created_at::text AS "createdAt"`,
         [newStatus, JSON.stringify(newAttrs), weekId]
@@ -201,10 +208,10 @@ export class WorkforceService {
 
   async generateYearWeeks(actor: DataActor, year: number, correlation: string) {
     permit(actor, 'workforce.manage');
-    return withTenant(this.pool, actor.tenantId, async client => {
-      // Find the first Monday of the year (or the Monday belonging to week 1)
+    if (!actor.accountId) throw new DomainError('ACCOUNT_REQUIRED', 400, 'Se requiere una cuenta activa para generar semanas.');
+    return execute(this.pool, actor, async client => {
       const jan4 = new Date(Date.UTC(year, 0, 4));
-      const day = jan4.getUTCDay() || 7; // 1 = Monday, 7 = Sunday
+      const day = jan4.getUTCDay() || 7;
       const mondayWeek1 = new Date(jan4.getTime() - (day - 1) * 86400000);
 
       const generatedWeeks: Array<{ weekCode: string; yearNumber: number; weekNumber: number; startDate: string; endDate: string }> = [];
@@ -212,7 +219,6 @@ export class WorkforceService {
 
       for (let w = 1; w <= 53; w++) {
         const sunday = new Date(currentMonday.getTime() + 6 * 86400000);
-        // If the Thursday of this week is in the next year, stop at week 52
         const thursday = new Date(currentMonday.getTime() + 3 * 86400000);
         if (w > 52 && thursday.getUTCFullYear() > year) break;
 
@@ -234,16 +240,16 @@ export class WorkforceService {
 
       for (const wk of generatedWeeks) {
         await client.query(
-          `INSERT INTO workforce_weeks(tenant_id, week_code, year_number, week_number, start_date, end_date, status, custom_attributes)
-           VALUES ($1, $2, $3, $4, $5::date, $6::date, 'open', '{}'::jsonb)
-           ON CONFLICT (tenant_id, week_code) DO NOTHING`,
-          [actor.tenantId, wk.weekCode, wk.yearNumber, wk.weekNumber, wk.startDate, wk.endDate]
+          `INSERT INTO workforce_weeks(tenant_id, account_id, week_code, year_number, week_number, start_date, end_date, status, custom_attributes)
+           VALUES ($1, $2, $3, $4, $5, $6::date, $7::date, 'open', '{}'::jsonb)
+           ON CONFLICT (tenant_id, account_id, week_code) DO NOTHING`,
+          [actor.tenantId, actor.accountId, wk.weekCode, wk.yearNumber, wk.weekNumber, wk.startDate, wk.endDate]
         );
       }
 
       await audit(client, actor, 'workforce.year_weeks_generated', actor.tenantId, correlation);
       const rows = (await client.query(
-        `SELECT id, week_code AS "weekCode", year_number AS "yearNumber", week_number AS "weekNumber",
+        `SELECT id, account_id AS "accountId", week_code AS "weekCode", year_number AS "yearNumber", week_number AS "weekNumber",
                 start_date::text AS "startDate", end_date::text AS "endDate", status,
                 COALESCE(custom_attributes, '{}'::jsonb) AS "customAttributes", created_at::text AS "createdAt"
          FROM workforce_weeks
@@ -260,9 +266,9 @@ export class WorkforceService {
 
   async listEmployeeTypes(actor: DataActor) {
     permit(actor, 'workforce.read');
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       const rows = (await client.query(
-        `SELECT id, name, slug, description, created_at::text AS "createdAt"
+        `SELECT id, account_id AS "accountId", name, slug, description, created_at::text AS "createdAt"
          FROM employee_types
          ORDER BY name ASC`
       )).rows;
@@ -272,20 +278,21 @@ export class WorkforceService {
 
   async createEmployeeType(actor: DataActor, body: unknown, key: string, correlation: string) {
     permit(actor, 'workforce.manage');
+    if (!actor.accountId) throw new DomainError('ACCOUNT_REQUIRED', 400, 'Se requiere una cuenta activa para crear roles laborales.');
     const input = employeeTypeCreateSchema.parse(body);
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       const existing = (await client.query(
-        `SELECT id, name, slug, description, created_at::text AS "createdAt"
-         FROM employee_types WHERE slug = $1`,
-        [input.slug]
+        `SELECT id, account_id AS "accountId", name, slug, description, created_at::text AS "createdAt"
+         FROM employee_types WHERE slug = $1 AND account_id = $2`,
+        [input.slug, actor.accountId]
       )).rows[0];
       if (existing) return employeeTypeSchema.parse(existing);
 
       const result = await client.query(
-        `INSERT INTO employee_types(tenant_id, name, slug, description)
-         VALUES ($1, $2, $3, $4)
-         RETURNING id, name, slug, description, created_at::text AS "createdAt"`,
-        [actor.tenantId, input.name, input.slug, input.description]
+        `INSERT INTO employee_types(tenant_id, account_id, name, slug, description)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING id, account_id AS "accountId", name, slug, description, created_at::text AS "createdAt"`,
+        [actor.tenantId, actor.accountId, input.name, input.slug, input.description]
       );
       const row = result.rows[0]!;
       await audit(client, actor, 'workforce.employee_type_created', row.id, correlation);
@@ -297,7 +304,7 @@ export class WorkforceService {
 
   async listTeams(actor: DataActor) {
     permit(actor, 'workforce.read');
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       const rows = (await client.query(
         `SELECT id, account_id AS "accountId", name, slug, description, created_at::text AS "createdAt"
          FROM teams
@@ -310,11 +317,14 @@ export class WorkforceService {
   async createTeam(actor: DataActor, body: unknown, key: string, correlation: string) {
     permit(actor, 'workforce.manage');
     const input = teamCreateSchema.parse(body);
-    return withTenant(this.pool, actor.tenantId, async client => {
+    const accountId = actor.accountId || input.accountId;
+    if (!accountId) throw new DomainError('ACCOUNT_REQUIRED', 400, 'Se requiere una cuenta activa para registrar equipos.');
+
+    return execute(this.pool, actor, async client => {
       const existing = (await client.query(
         `SELECT id, account_id AS "accountId", name, slug, description, created_at::text AS "createdAt"
-         FROM teams WHERE slug = $1`,
-        [input.slug]
+         FROM teams WHERE slug = $1 AND account_id = $2`,
+        [input.slug, accountId]
       )).rows[0];
       if (existing) return teamSchema.parse(existing);
 
@@ -322,7 +332,7 @@ export class WorkforceService {
         `INSERT INTO teams(tenant_id, account_id, name, slug, description)
          VALUES ($1, $2, $3, $4, $5)
          RETURNING id, account_id AS "accountId", name, slug, description, created_at::text AS "createdAt"`,
-        [actor.tenantId, input.accountId ?? null, input.name, input.slug, input.description]
+        [actor.tenantId, accountId, input.name, input.slug, input.description]
       );
       const row = result.rows[0]!;
       await audit(client, actor, 'workforce.team_created', row.id, correlation);
@@ -337,13 +347,13 @@ export class WorkforceService {
 
   async importTeamsFromExcel(actor: DataActor, body: unknown, correlation: string): Promise<TeamRosterImportResult> {
     permit(actor, 'workforce.manage');
+    if (!actor.accountId) throw new DomainError('ACCOUNT_REQUIRED', 400, 'Se requiere una cuenta activa para importar personal.');
     const input = teamRosterImportInputSchema.parse(body);
 
     const buffer = Buffer.from(input.base64Content, 'base64');
     const rows = await parseRosterFile(buffer, input.filename);
 
-    return withTenant(this.pool, actor.tenantId, async client => {
-      // 1. Collect all distinct team names from rows
+    return execute(this.pool, actor, async client => {
       interface TeamImportEntry {
         id?: string | undefined;
         name: string;
@@ -353,8 +363,7 @@ export class WorkforceService {
       }
       const teamMap = new Map<string, TeamImportEntry>();
 
-      // Fetch existing teams in tenant
-      const existingTeams = (await client.query('SELECT id, name, slug FROM teams')).rows;
+      const existingTeams = (await client.query('SELECT id, name, slug FROM teams WHERE account_id = $1', [actor.accountId])).rows;
       const existingTeamsBySlug = new Map<string, { id: string; name: string; slug: string }>();
       const existingTeamsByName = new Map<string, { id: string; name: string; slug: string }>();
       for (const t of existingTeams) {
@@ -362,7 +371,6 @@ export class WorkforceService {
         existingTeamsByName.set(t.name.toLowerCase().trim(), t);
       }
 
-      // Group rows by team
       for (const r of rows) {
         const tName = r.teamName.trim();
         const normName = tName.toLowerCase();
@@ -401,10 +409,9 @@ export class WorkforceService {
         }
       }
 
-      // If dryRun is true, return early without DB writes
       if (input.dryRun) {
         const existingEmpCodes = new Set<string>();
-        const empCodeRows = (await client.query('SELECT code FROM employees')).rows;
+        const empCodeRows = (await client.query('SELECT code FROM employees WHERE account_id = $1', [actor.accountId])).rows;
         for (const e of empCodeRows) existingEmpCodes.add(e.code);
 
         const seenInFile = new Set<string>();
@@ -444,18 +451,17 @@ export class WorkforceService {
         });
       }
 
-      // dryRun is false -> Perform actual DB mutations atomically
-      // Ensure default employee_type exists
+      // Ensure default employee_type exists in this account
       let defaultTypeId: string;
-      const typeRows = (await client.query('SELECT id, name, slug FROM employee_types ORDER BY created_at ASC')).rows;
+      const typeRows = (await client.query('SELECT id, name, slug FROM employee_types WHERE account_id = $1 ORDER BY created_at ASC', [actor.accountId])).rows;
       if (typeRows.length > 0) {
         defaultTypeId = typeRows[0]!.id;
       } else {
         const insType = await client.query(
-          `INSERT INTO employee_types(tenant_id, name, slug, description)
-           VALUES ($1, 'Agente', 'agente', 'Rol operativo estándar de call center')
+          `INSERT INTO employee_types(tenant_id, account_id, name, slug, description)
+           VALUES ($1, $2, 'Agente', 'agente', 'Rol operativo estándar de call center')
            RETURNING id`,
-          [actor.tenantId]
+          [actor.tenantId, actor.accountId]
         );
         defaultTypeId = insType.rows[0]!.id;
       }
@@ -474,10 +480,10 @@ export class WorkforceService {
             slug = `${teamEntry.slug}_${counter++}`;
           }
           const res = await client.query(
-            `INSERT INTO teams(tenant_id, name, slug, description)
-             VALUES ($1, $2, $3, $4)
+            `INSERT INTO teams(tenant_id, account_id, name, slug, description)
+             VALUES ($1, $2, $3, $4, $5)
              RETURNING id, slug`,
-            [actor.tenantId, teamEntry.name, slug, `Equipo importado desde Excel (${input.filename})`]
+            [actor.tenantId, actor.accountId, teamEntry.name, slug, `Equipo importado desde Excel (${input.filename})`]
           );
           const newTeamId = res.rows[0]!.id as string;
           const newTeamSlug = res.rows[0]!.slug as string;
@@ -488,15 +494,15 @@ export class WorkforceService {
         }
       }
 
-      // Cache existing weeks for resolving weekCode
+      // Cache existing weeks
       const weeksByCode = new Map<string, string>();
-      const weekRows = (await client.query('SELECT id, week_code FROM workforce_weeks')).rows;
+      const weekRows = (await client.query('SELECT id, week_code FROM workforce_weeks WHERE account_id = $1', [actor.accountId])).rows;
       for (const w of weekRows) {
         weeksByCode.set(w.week_code, w.id);
       }
 
       const pendingSupervisors: { employeeId: string; supervisorCode: string; weekId?: string | undefined }[] = [];
-      const handledEmployees = new Map<string, string>(); // code -> id
+      const handledEmployees = new Map<string, string>();
 
       for (const r of rows) {
         if (!r.employeeCode) continue;
@@ -520,18 +526,18 @@ export class WorkforceService {
           empId = handledEmployees.get(r.employeeCode)!;
         } else {
           const existingEmp = (await client.query(
-            'SELECT id, first_name, last_name, email, bms_id, wave FROM employees WHERE code = $1',
-            [r.employeeCode]
+            'SELECT id, first_name, last_name, email, bms_id, wave FROM employees WHERE code = $1 AND account_id = $2',
+            [r.employeeCode, actor.accountId]
           )).rows[0];
 
           if (!existingEmp) {
             const fn = r.firstName || 'Agente';
             const ln = r.lastName || r.employeeCode;
             const ins = await client.query(
-              `INSERT INTO employees(tenant_id, code, first_name, last_name, email, status, bms_id, wave)
-               VALUES ($1, $2, $3, $4, $5, 'active', $6, $7)
+              `INSERT INTO employees(tenant_id, account_id, code, first_name, last_name, email, status, bms_id, wave)
+               VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8)
                RETURNING id`,
-              [actor.tenantId, r.employeeCode, fn, ln, r.email || null, r.bmsId || null, r.wave || null]
+              [actor.tenantId, actor.accountId, r.employeeCode, fn, ln, r.email || null, r.bmsId || null, r.wave || null]
             );
             empId = ins.rows[0]!.id;
             employeesCreated++;
@@ -561,9 +567,9 @@ export class WorkforceService {
           );
 
           await client.query(
-            `INSERT INTO employment_assignments(tenant_id, employee_id, employee_type_id, team_id, week_id, metadata, valid_from)
-             VALUES ($1, $2, $3, $4, $5, $6, now())`,
-            [actor.tenantId, empId, empTypeId, teamId, targetWeekId ?? null, JSON.stringify({ importedFrom: input.filename })]
+            `INSERT INTO employment_assignments(tenant_id, account_id, employee_id, employee_type_id, team_id, week_id, metadata, valid_from)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, now())`,
+            [actor.tenantId, actor.accountId, empId, empTypeId, teamId, targetWeekId ?? null, JSON.stringify({ importedFrom: input.filename })]
           );
           assignmentsCreated++;
         }
@@ -576,8 +582,8 @@ export class WorkforceService {
       // Link supervisors
       for (const ps of pendingSupervisors) {
         const supRow = (await client.query(
-          'SELECT id FROM employees WHERE code = $1',
-          [ps.supervisorCode]
+          'SELECT id FROM employees WHERE code = $1 AND account_id = $2',
+          [ps.supervisorCode, actor.accountId]
         )).rows[0];
 
         if (supRow && supRow.id !== ps.employeeId) {
@@ -589,9 +595,9 @@ export class WorkforceService {
           );
 
           await client.query(
-            `INSERT INTO employee_relationships(tenant_id, employee_id, manager_id, relation_type, week_id, valid_from)
-             VALUES ($1, $2, $3, 'supervisor', $4, now())`,
-            [actor.tenantId, ps.employeeId, supRow.id, ps.weekId ?? null]
+            `INSERT INTO employee_relationships(tenant_id, account_id, employee_id, manager_id, relation_type, week_id, valid_from)
+             VALUES ($1, $2, $3, $4, 'supervisor', $5, now())`,
+            [actor.tenantId, actor.accountId, ps.employeeId, supRow.id, ps.weekId ?? null]
           );
           supervisorsLinked++;
         } else {
@@ -599,7 +605,44 @@ export class WorkforceService {
         }
       }
 
-      await audit(client, actor, 'workforce.teams_roster_imported', actor.tenantId, correlation);
+      // Create frozen roster version and entries if a week is targeted
+      const effectiveWeekId = input.defaultWeekId || (rows[0]?.weekCode ? weeksByCode.get(rows[0].weekCode) : undefined);
+      if (effectiveWeekId) {
+        const nextVerRow = (await client.query<{ next_num: number }>(
+          'SELECT COALESCE(MAX(version_number), 0) + 1 AS next_num FROM workforce_roster_versions WHERE week_id = $1 AND account_id = $2',
+          [effectiveWeekId, actor.accountId]
+        )).rows[0];
+        const nextVerNum = nextVerRow?.next_num ?? 1;
+
+        const rVer = await client.query<{ id: string }>(
+          `INSERT INTO workforce_roster_versions (tenant_id, account_id, week_id, version_number, status, row_count, created_by, published_at)
+           VALUES ($1, $2, $3, $4, 'published', $5, $6, now())
+           RETURNING id`,
+          [actor.tenantId, actor.accountId, effectiveWeekId, nextVerNum, rows.length, actor.userId]
+        );
+        const rosterVersionId = rVer.rows[0]!.id;
+
+        for (const r of rows) {
+          if (!r.employeeCode) continue;
+          const empId = handledEmployees.get(r.employeeCode);
+          if (!empId) continue;
+          const teamEntry = teamMap.get(r.teamName.toLowerCase().trim());
+
+          await client.query(
+            `INSERT INTO workforce_roster_entries (
+              tenant_id, account_id, roster_version_id, employee_id, employee_code, bms_id, wave,
+              team_id, team_name, employee_type_slug, source_sheet, source_row
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+            [
+              actor.tenantId, actor.accountId, rosterVersionId, empId, r.employeeCode,
+              r.bmsId || null, r.wave || null, teamEntry?.id || null, teamEntry?.name || r.teamName,
+              r.role ? slugify(r.role) : 'agente', null, null
+            ]
+          );
+        }
+      }
+
+      await audit(client, actor, 'workforce.teams_roster_imported', actor.accountId ?? actor.tenantId, correlation);
 
       return teamRosterImportResultSchema.parse({
         dryRun: false,
@@ -625,10 +668,10 @@ export class WorkforceService {
 
   async listEmployees(actor: DataActor, options: { teamId?: string | undefined; search?: string | undefined } = {}) {
     permit(actor, 'workforce.read');
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       let query = `
         SELECT 
-          e.id, e.code, e.first_name AS "firstName", e.last_name AS "lastName",
+          e.id, e.account_id AS "accountId", e.code, e.first_name AS "firstName", e.last_name AS "lastName",
           e.normalized_name AS "normalizedName", e.bms_id AS "bmsId", e.wave,
           COALESCE(e.custom_fields, '{}'::jsonb) AS "customFields",
           e.email, e.status, e.hire_date::text AS "hireDate", e.created_at::text AS "createdAt",
@@ -681,7 +724,7 @@ export class WorkforceService {
   private async getEmployeeInternal(client: PoolClient, id: string) {
     const row = (await client.query(
       `SELECT 
-        e.id, e.code, e.first_name AS "firstName", e.last_name AS "lastName",
+        e.id, e.account_id AS "accountId", e.code, e.first_name AS "firstName", e.last_name AS "lastName",
         e.normalized_name AS "normalizedName", e.bms_id AS "bmsId", e.wave,
         COALESCE(e.custom_fields, '{}'::jsonb) AS "customFields",
         e.email, e.status, e.hire_date::text AS "hireDate", e.created_at::text AS "createdAt",
@@ -715,31 +758,32 @@ export class WorkforceService {
 
   async getEmployee(actor: DataActor, id: string) {
     permit(actor, 'workforce.read');
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       return this.getEmployeeInternal(client, id);
     });
   }
 
   async createEmployee(actor: DataActor, body: unknown, key: string, correlation: string) {
     permit(actor, 'workforce.manage');
+    if (!actor.accountId) throw new DomainError('ACCOUNT_REQUIRED', 400, 'Se requiere una cuenta activa para registrar agentes.');
     const input = employeeCreateSchema.parse(body);
 
-    return withTenant(this.pool, actor.tenantId, async client => {
-      // Check code uniqueness within tenant
+    return execute(this.pool, actor, async client => {
       const existing = (await client.query(
-        'SELECT id FROM employees WHERE code = $1',
-        [input.code]
+        'SELECT id FROM employees WHERE code = $1 AND account_id = $2',
+        [input.code, actor.accountId]
       )).rows[0];
       if (existing) {
-        throw new DomainError('EMPLOYEE_CODE_EXISTS', 409, `El código de agente "${input.code}" ya está registrado en la organización.`);
+        throw new DomainError('EMPLOYEE_CODE_EXISTS', 409, `El código de agente "${input.code}" ya está registrado en esta cuenta.`);
       }
 
       const empResult = await client.query(
-        `INSERT INTO employees(tenant_id, code, first_name, last_name, email, status, hire_date, bms_id, wave, custom_fields)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        `INSERT INTO employees(tenant_id, account_id, code, first_name, last_name, email, status, hire_date, bms_id, wave, custom_fields)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          RETURNING id`,
         [
           actor.tenantId,
+          actor.accountId,
           input.code,
           input.firstName,
           input.lastName,
@@ -753,21 +797,19 @@ export class WorkforceService {
       );
       const employeeId = empResult.rows[0]!.id;
 
-      // Create initial employment assignment if type specified
       if (input.employeeTypeId) {
         await client.query(
-          `INSERT INTO employment_assignments(tenant_id, employee_id, employee_type_id, team_id, valid_from)
-           VALUES ($1, $2, $3, $4, now())`,
-          [actor.tenantId, employeeId, input.employeeTypeId, input.teamId ?? null]
+          `INSERT INTO employment_assignments(tenant_id, account_id, employee_id, employee_type_id, team_id, valid_from)
+           VALUES ($1, $2, $3, $4, $5, now())`,
+          [actor.tenantId, actor.accountId, employeeId, input.employeeTypeId, input.teamId ?? null]
         );
       }
 
-      // Create initial manager relationship if manager specified
       if (input.managerId) {
         await client.query(
-          `INSERT INTO employee_relationships(tenant_id, employee_id, manager_id, relation_type, valid_from)
-           VALUES ($1, $2, $3, 'supervisor', now())`,
-          [actor.tenantId, employeeId, input.managerId]
+          `INSERT INTO employee_relationships(tenant_id, account_id, employee_id, manager_id, relation_type, valid_from)
+           VALUES ($1, $2, $3, $4, 'supervisor', now())`,
+          [actor.tenantId, actor.accountId, employeeId, input.managerId]
         );
       }
 
@@ -780,7 +822,7 @@ export class WorkforceService {
 
   async listAssignments(actor: DataActor, employeeId: string) {
     permit(actor, 'workforce.read');
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       const rows = (await client.query(
         `SELECT 
           a.id, a.employee_id AS "employeeId", a.employee_type_id AS "employeeTypeId", 
@@ -804,9 +846,10 @@ export class WorkforceService {
   async createAssignment(actor: DataActor, body: unknown, key: string, correlation: string) {
     permit(actor, 'workforce.manage');
     const input = employmentAssignmentCreateSchema.parse(body);
+    const accountId = actor.accountId || input.accountId;
+    if (!accountId) throw new DomainError('ACCOUNT_REQUIRED', 400, 'Se requiere una cuenta activa para registrar asignaciones.');
 
-    return withTenant(this.pool, actor.tenantId, async client => {
-      // Close open active assignments for this employee
+    return execute(this.pool, actor, async client => {
       await client.query(
         `UPDATE employment_assignments 
          SET valid_to = now() 
@@ -815,15 +858,15 @@ export class WorkforceService {
       );
 
       const result = await client.query(
-        `INSERT INTO employment_assignments(tenant_id, employee_id, employee_type_id, team_id, account_id, week_id, metadata, valid_from, valid_to)
+        `INSERT INTO employment_assignments(tenant_id, account_id, employee_id, employee_type_id, team_id, week_id, metadata, valid_from, valid_to)
          VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8::timestamptz, now()), $9::timestamptz)
          RETURNING id`,
         [
           actor.tenantId,
+          accountId,
           input.employeeId,
           input.employeeTypeId,
           input.teamId ?? null,
-          input.accountId ?? null,
           input.weekId ?? null,
           JSON.stringify(input.metadata ?? {}),
           input.validFrom ?? null,
@@ -857,7 +900,7 @@ export class WorkforceService {
 
   async listRelationships(actor: DataActor, employeeId: string) {
     permit(actor, 'workforce.read');
-    return withTenant(this.pool, actor.tenantId, async client => {
+    return execute(this.pool, actor, async client => {
       const rows = (await client.query(
         `SELECT 
           r.id, r.employee_id AS "employeeId", r.manager_id AS "managerId",
@@ -878,10 +921,10 @@ export class WorkforceService {
 
   async createRelationship(actor: DataActor, body: unknown, key: string, correlation: string) {
     permit(actor, 'workforce.manage');
+    if (!actor.accountId) throw new DomainError('ACCOUNT_REQUIRED', 400, 'Se requiere una cuenta activa para crear jerarquías laborales.');
     const input = employeeRelationshipCreateSchema.parse(body);
 
-    return withTenant(this.pool, actor.tenantId, async client => {
-      // Close open active relationship of same type
+    return execute(this.pool, actor, async client => {
       await client.query(
         `UPDATE employee_relationships
          SET valid_to = now()
@@ -890,11 +933,12 @@ export class WorkforceService {
       );
 
       const result = await client.query(
-        `INSERT INTO employee_relationships(tenant_id, employee_id, manager_id, relation_type, week_id, valid_from, valid_to)
-         VALUES ($1, $2, $3, $4, $5, COALESCE($6::timestamptz, now()), $7::timestamptz)
+        `INSERT INTO employee_relationships(tenant_id, account_id, employee_id, manager_id, relation_type, week_id, valid_from, valid_to)
+         VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::timestamptz, now()), $8::timestamptz)
          RETURNING id`,
         [
           actor.tenantId,
+          actor.accountId,
           input.employeeId,
           input.managerId,
           input.relationType,
@@ -921,6 +965,141 @@ export class WorkforceService {
       )).rows[0]!;
 
       return employeeRelationshipSchema.parse(row);
+    });
+  }
+
+  // --- Roster Versions & Frozen Entries ---
+
+  async listRosterVersions(actor: DataActor, weekId: string) {
+    permit(actor, 'workforce.read');
+    const wId = z.uuid().parse(weekId);
+    return execute(this.pool, actor, async client => {
+      const rows = (await client.query(
+        `SELECT id, week_id AS "weekId", version_number AS "versionNumber", status,
+                storage_path AS "storagePath", sha256, mapping, row_count AS "rowCount",
+                issue_count AS "issueCount", created_by AS "createdBy",
+                created_at::text AS "createdAt", published_at::text AS "publishedAt"
+         FROM workforce_roster_versions
+         WHERE week_id = $1
+         ORDER BY version_number DESC`,
+        [wId]
+      )).rows;
+      return rows;
+    });
+  }
+
+  async getRosterEntries(actor: DataActor, rosterVersionId: string) {
+    permit(actor, 'workforce.read');
+    const rvId = z.uuid().parse(rosterVersionId);
+    return execute(this.pool, actor, async client => {
+      const rows = (await client.query(
+        `SELECT id, roster_version_id AS "rosterVersionId", employee_id AS "employeeId",
+                employee_code AS "employeeCode", bms_id AS "bmsId", wave,
+                team_id AS "teamId", team_name AS "teamName",
+                employee_type_slug AS "employeeTypeSlug",
+                supervisor_id AS "supervisorId", supervisor_name AS "supervisorName",
+                floor_manager_id AS "floorManagerId", floor_manager_name AS "floorManagerName",
+                metadata, source_sheet AS "sourceSheet", source_row AS "sourceRow"
+         FROM workforce_roster_entries
+         WHERE roster_version_id = $1
+         ORDER BY employee_code ASC LIMIT 1000`,
+        [rvId]
+      )).rows;
+      return rows;
+    });
+  }
+
+  async publishRosterVersion(actor: DataActor, rosterVersionId: string, correlation: string) {
+    permit(actor, 'workforce.manage');
+    const rvId = z.uuid().parse(rosterVersionId);
+    return execute(this.pool, actor, async client => {
+      const ver = (await client.query<{ id: string; week_id: string; status: string }>(
+        'SELECT id, week_id, status FROM workforce_roster_versions WHERE id = $1 FOR UPDATE',
+        [rvId]
+      )).rows[0];
+      if (!ver) throw new DomainError('ROSTER_NOT_FOUND', 404, 'Versión de roster no encontrada.');
+
+      await client.query(
+        "UPDATE workforce_roster_versions SET status = 'published', published_at = now() WHERE id = $1",
+        [rvId]
+      );
+      await audit(client, actor, 'workforce.roster_published', rvId, correlation);
+      return { ok: true, id: rvId, status: 'published' };
+    });
+  }
+
+  async cloneWeekRoster(actor: DataActor, sourceWeekId: string, targetWeekId: string, correlation: string) {
+    permit(actor, 'workforce.manage');
+    if (!actor.accountId) throw new DomainError('ACCOUNT_REQUIRED', 400, 'Se requiere una cuenta activa para clonar rosters.');
+    const srcId = z.uuid().parse(sourceWeekId);
+    const tgtId = z.uuid().parse(targetWeekId);
+
+    return execute(this.pool, actor, async client => {
+      const srcVer = (await client.query<{ id: string }>(
+        `SELECT id FROM workforce_roster_versions
+         WHERE week_id = $1 AND account_id = $2
+         ORDER BY (status = 'published') DESC, version_number DESC
+         LIMIT 1`,
+        [srcId, actor.accountId]
+      )).rows[0];
+
+      let copiedCount = 0;
+      if (srcVer) {
+        const nextVerRow = (await client.query<{ next_num: number }>(
+          'SELECT COALESCE(MAX(version_number), 0) + 1 AS next_num FROM workforce_roster_versions WHERE week_id = $1 AND account_id = $2',
+          [tgtId, actor.accountId]
+        )).rows[0];
+        const nextVerNum = nextVerRow?.next_num ?? 1;
+
+        const newVer = await client.query<{ id: string }>(
+          `INSERT INTO workforce_roster_versions (tenant_id, account_id, week_id, version_number, status, created_by, published_at)
+           VALUES ($1, $2, $3, $4, 'published', $5, now())
+           RETURNING id`,
+          [actor.tenantId, actor.accountId, tgtId, nextVerNum, actor.userId]
+        );
+        const newVerId = newVer.rows[0]!.id;
+
+        const entries = (await client.query(
+          'SELECT * FROM workforce_roster_entries WHERE roster_version_id = $1',
+          [srcVer.id]
+        )).rows;
+
+        for (const e of entries) {
+          await client.query(
+            `INSERT INTO workforce_roster_entries (
+              tenant_id, account_id, roster_version_id, employee_id, employee_code, bms_id, wave,
+              team_id, team_name, employee_type_slug, supervisor_id, supervisor_name,
+              floor_manager_id, floor_manager_name, metadata
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+            [
+              actor.tenantId, actor.accountId, newVerId, e.employee_id, e.employee_code, e.bms_id, e.wave,
+              e.team_id, e.team_name, e.employee_type_slug, e.supervisor_id, e.supervisor_name,
+              e.floor_manager_id, e.floor_manager_name, JSON.stringify(e.metadata ?? {})
+            ]
+          );
+        }
+        copiedCount = entries.length;
+        await client.query('UPDATE workforce_roster_versions SET row_count = $1 WHERE id = $2', [copiedCount, newVerId]);
+      } else {
+        const assignments = (await client.query<{ employee_id: string; employee_type_id: string; team_id: string | null; metadata: any }>(
+          `SELECT employee_id, employee_type_id, team_id, metadata
+           FROM employment_assignments
+           WHERE week_id = $1 AND account_id = $2 AND (valid_to IS NULL OR valid_to > now())`,
+          [srcId, actor.accountId]
+        )).rows;
+
+        for (const a of assignments) {
+          await client.query(
+            `INSERT INTO employment_assignments (tenant_id, account_id, employee_id, employee_type_id, team_id, week_id, metadata, valid_from)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, now())`,
+            [actor.tenantId, actor.accountId, a.employee_id, a.employee_type_id, a.team_id, tgtId, JSON.stringify(a.metadata ?? {})]
+          );
+          copiedCount++;
+        }
+      }
+
+      await audit(client, actor, 'workforce.week_roster_cloned', tgtId, correlation);
+      return { ok: true, sourceWeekId: srcId, targetWeekId: tgtId, copiedCount };
     });
   }
 }

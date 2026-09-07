@@ -17,10 +17,19 @@ import { decryptSecret, encryptSecret, hashPassword, newToken, tokenHash, verify
 const memberSchema = z.object({ tenant_id: z.uuid(), role: roleSchema });
 const userSchema = z.object({ id: z.uuid(), password_hash: z.string(), mfa_enabled: z.boolean(), disabled: z.boolean() });
 const recordSchema = z.object({
-  user_id: z.uuid(), tenant_id: z.uuid().nullable(), stage: z.enum(['mfa_setup', 'mfa_verify', 'authenticated']),
+  user_id: z.uuid(), tenant_id: z.uuid().nullable(), account_id: z.uuid().nullable(),
+  account_name: z.string().nullable().optional(), account_archived_at: z.coerce.date().nullable().optional(),
+  stage: z.enum(['mfa_setup', 'mfa_verify', 'authenticated']),
   pending_mfa_secret: z.string().nullable(), mfa_secret: z.string().nullable(), mfa_enabled: z.boolean(),
 });
-export type Principal = { userId: string; tenantId: string; role: z.infer<typeof roleSchema>; capabilities: Capability[] };
+export type Principal = {
+  userId: string;
+  tenantId: string;
+  role: z.infer<typeof roleSchema>;
+  capabilities: Capability[];
+  accountId?: string | undefined;
+  accountName?: string | undefined;
+};
 
 /**
  * Servicio de gestión de autenticación, sesiones y MFA.
@@ -48,9 +57,9 @@ export class AuthService {
     if ((result.rows[0]?.attempts ?? limit + 1) > limit) throw new AppError('RATE_LIMITED', 429, 'Demasiados intentos. Espera 15 minutos antes de volver a intentarlo.');
   }
   private async membership(client: PoolClient, userId: string, tenantId?: string) {
-    const result = await client.query('SELECT tenant_id, role FROM identity.memberships WHERE user_id = $1 AND ($2::uuid IS NULL OR tenant_id = $2::uuid) ORDER BY id LIMIT 2', [userId, tenantId ?? null]);
+    const result = await client.query('SELECT id, tenant_id, role FROM identity.memberships WHERE user_id = $1 AND ($2::uuid IS NULL OR tenant_id = $2::uuid) ORDER BY id LIMIT 2', [userId, tenantId ?? null]);
     if (result.rows.length !== 1) throw new AppError('ORGANIZATION_SELECTION_REQUIRED', 403, 'La membresía necesita revisión por un administrador.');
-    return memberSchema.parse(result.rows[0]);
+    return { ...memberSchema.parse(result.rows[0]), membershipId: result.rows[0].id as string };
   }
   async login(email: string, password: string, ip: string) {
     await this.rateLimit(`login-ip:${ip}`, 60);
@@ -72,8 +81,11 @@ export class AuthService {
   }
   private async record(token: string) {
     if (!/^[a-f0-9]{64}$/.test(token)) throw new AppError('UNAUTHENTICATED', 401, 'Inicia sesión para continuar.');
-    const result = await this.pool.query(`SELECT s.user_id, s.tenant_id, s.stage, s.pending_mfa_secret, u.mfa_secret, u.mfa_enabled
-      FROM identity.sessions s JOIN identity.users u ON u.id = s.user_id
+    const result = await this.pool.query(`SELECT s.user_id, s.tenant_id, s.account_id, s.stage, s.pending_mfa_secret,
+        u.mfa_secret, u.mfa_enabled, a.name as account_name, a.archived_at as account_archived_at
+      FROM identity.sessions s
+      JOIN identity.users u ON u.id = s.user_id
+      LEFT JOIN public.accounts a ON a.id = s.account_id AND a.tenant_id = s.tenant_id
       WHERE s.token_hash = $1 AND s.expires_at > now() AND NOT u.disabled`, [tokenHash(token)]);
     if (!result.rows[0]) throw new AppError('UNAUTHENTICATED', 401, 'Tu sesión terminó. Inicia sesión de nuevo.');
     return recordSchema.parse(result.rows[0]);
@@ -115,9 +127,87 @@ export class AuthService {
       const member = await this.membership(client, record.user_id, record.tenant_id ?? undefined);
       const isDev = process.env.NODE_ENV === 'development';
       if (member.role === 'admin' && !record.mfa_enabled && !isDev) throw new AppError('MFA_REQUIRED', 403, 'Configura MFA para acceder como administrador.');
-      return { userId: record.user_id, tenantId: member.tenant_id, role: member.role, capabilities: [...roleCapabilities[member.role]] };
+      
+      let accountId = record.account_id ?? undefined;
+      let accountName = record.account_name ?? undefined;
+
+      // Si la cuenta asociada fue archivada, invalidamos la selección activa
+      if (record.account_archived_at) {
+        await client.query('UPDATE identity.sessions SET account_id = NULL WHERE token_hash = $1', [tokenHash(token)]);
+        accountId = undefined;
+        accountName = undefined;
+      } else if (accountId && member.role !== 'admin') {
+        // Verificar si el usuario aún tiene acceso explícito a esta cuenta
+        const access = await client.query(
+          'SELECT 1 FROM identity.membership_account_access WHERE membership_id = $1 AND account_id = $2',
+          [member.membershipId, accountId]
+        );
+        if (!access.rows[0]) {
+          await client.query('UPDATE identity.sessions SET account_id = NULL WHERE token_hash = $1', [tokenHash(token)]);
+          accountId = undefined;
+          accountName = undefined;
+        }
+      }
+
+      return {
+        userId: record.user_id,
+        tenantId: member.tenant_id,
+        role: member.role,
+        capabilities: [...roleCapabilities[member.role]],
+        accountId,
+        accountName,
+      };
     });
   }
+
+  async switchAccount(token: string, accountId: string) {
+    z.uuid().parse(accountId);
+    const principal = await this.authenticate(token);
+    return withIdentity(this.pool, principal.userId, async client => {
+      const member = await this.membership(client, principal.userId, principal.tenantId);
+      const acc = await client.query<{ id: string; name: string }>(
+        'SELECT id, name FROM public.accounts WHERE id = $1 AND tenant_id = $2 AND archived_at IS NULL',
+        [accountId, principal.tenantId]
+      );
+      if (!acc.rows[0]) throw new AppError('ACCOUNT_NOT_FOUND', 404, 'La cuenta no existe o está archivada.');
+
+      if (member.role !== 'admin') {
+        const access = await client.query(
+          'SELECT 1 FROM identity.membership_account_access WHERE membership_id = $1 AND account_id = $2',
+          [member.membershipId, accountId]
+        );
+        if (!access.rows[0]) throw new AppError('ACCOUNT_ACCESS_DENIED', 403, 'No tienes permiso para acceder a esta cuenta.');
+      }
+
+      const nextToken = newToken();
+      const ttl = 8 * 60 * 60;
+      await client.query('DELETE FROM identity.sessions WHERE token_hash = $1', [tokenHash(token)]);
+      await client.query(
+        "INSERT INTO identity.sessions(token_hash, user_id, tenant_id, account_id, stage, expires_at) VALUES ($1, $2, $3, $4, 'authenticated', now() + $5 * interval '1 second')",
+        [tokenHash(nextToken), principal.userId, principal.tenantId, accountId, ttl]
+      );
+      return {
+        token: nextToken,
+        stage: 'authenticated' as const,
+        ttl,
+        accountId,
+        accountName: acc.rows[0].name,
+      };
+    });
+  }
+
+  async clearActiveAccount(token: string) {
+    const principal = await this.authenticate(token);
+    const nextToken = newToken();
+    const ttl = 8 * 60 * 60;
+    await this.pool.query('DELETE FROM identity.sessions WHERE token_hash = $1', [tokenHash(token)]);
+    await this.pool.query(
+      "INSERT INTO identity.sessions(token_hash, user_id, tenant_id, account_id, stage, expires_at) VALUES ($1, $2, $3, NULL, 'authenticated', now() + $4 * interval '1 second')",
+      [tokenHash(nextToken), principal.userId, principal.tenantId, ttl]
+    );
+    return { token: nextToken, stage: 'authenticated' as const, ttl };
+  }
+
   async logout(token: string) { await this.pool.query('DELETE FROM identity.sessions WHERE token_hash = $1', [tokenHash(token)]); }
   async revokeAll(principal: Principal) { await this.pool.query('DELETE FROM identity.sessions WHERE user_id = $1', [principal.userId]); }
 }
