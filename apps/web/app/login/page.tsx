@@ -1,3 +1,10 @@
+/**
+ * @file page.tsx
+ * @description Pantalla de inicio de sesión y autenticación multifactor (MFA/TOTP).
+ * Permite ingresar credenciales (email y contraseña), configurar TOTP si es requerido
+ * y verificar códigos de 6 dígitos para acceder al portal privado de ATLAS.
+ */
+
 'use client';
 import { useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
@@ -7,12 +14,19 @@ import { loginResultSchema, mfaSetupSchema } from '@atlas/contracts';
 import { Brand } from '../../components/workspace';
 import { api } from '../../lib/api';
 
+/**
+ * Componente de página para autenticación de usuarios y flujo de verificación MFA.
+ */
 export default function LoginPage() {
   const router = useRouter();
   const [stage, setStage] = useState<'login' | 'mfa_setup' | 'mfa_verify'>('login');
   const [secret, setSecret] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+
+  /**
+   * Procesa el envío del formulario según la etapa activa (credenciales o código TOTP).
+   */
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setError('');
     const form = new FormData(event.currentTarget);

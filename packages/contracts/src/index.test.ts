@@ -1,5 +1,13 @@
+/**
+ * @file packages/contracts/src/index.test.ts
+ * @description Suite de pruebas unitarias para fronteras de confianza y validación de esquemas Zod en @atlas/contracts.
+ * Verifica la matriz de capacidades de RBAC, aislamiento de tenants contra inyecciones, límites de MFA/TOTP,
+ * sanitización de mapeos de ingesta, prevención de sobreescritura maliciosa de queries y contratos de workforce.
+ */
+
 import { describe, expect, it } from 'vitest';
 import { datasetMappingSchema, loginSchema, totpSchema, errorResponseSchema, sessionSchema, roleCapabilities, roleSchema, employeeCreateSchema, teamCreateSchema, querySchema, widgetDefinitionSchema, createUserSchema, updateProfileSchema, changePasswordSchema, memberSchema } from './index.js';
+
 describe('Trust boundaries', () => {
   it('applies the user-approved role matrix and reserves mutations for Admin', () => {
     for (const role of roleSchema.options.filter(role => role !== 'admin')) {

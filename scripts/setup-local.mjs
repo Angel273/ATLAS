@@ -1,3 +1,9 @@
+/**
+ * @file setup-local.mjs
+ * @description Script de aprovisionamiento de configuración para el entorno local.
+ * Genera contraseñas criptográficas seguras, llaves de cifrado y el archivo `.env` inicial de forma segura.
+ */
+
 import { randomBytes } from 'node:crypto';
 import { existsSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

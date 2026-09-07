@@ -1,3 +1,14 @@
+/**
+ * @file apps/web/components/widget-config-sidebar.tsx
+ * @description Panel lateral deslizable para la configuración avanzada de widgets en Dashboards (@atlas/web).
+ * Permite ajustar:
+ * - Tipo de widget (KPI card, línea, barras, área, tabla, texto libre).
+ * - Métrica asociada (KPI publicado) y dimensión de desglose.
+ * - Paleta cromática corporativa y líneas de meta operacional.
+ * - Columnas calculadas en la vista (porcentaje de objetivo, variaciones, multiplicadores).
+ * - Reglas de formato condicional (semáforos en modo badge, fondo o barra).
+ */
+
 'use client';
 import { useState, useEffect } from 'react';
 import {
@@ -30,7 +41,11 @@ const PALETTE = [
   { name: 'Pizarra Grafito', color: '#4F4E4A' },
 ];
 
+/**
+ * Componente de barra lateral para edición de propiedades visuales y semánticas de un widget.
+ */
 export function WidgetConfigSidebar({
+
   widget,
   kpis,
   isOpen,

@@ -1,3 +1,17 @@
+/**
+ * @file apps/api/src/ai/tools.ts
+ * @description Catálogo de herramientas (Tools) gobernadas de solo lectura para el asistente de IA en ATLAS.
+ * Proporciona 7 herramientas con esquemas JSON Schema declarativos:
+ * 1. `search_kpis`: Búsqueda de métricas en la capa semántica.
+ * 2. `get_kpi_definition`: Definición técnica de fórmula, umbrales y metas.
+ * 3. `describe_dataset`: Estructura y tipos de datos del dataset subyacente.
+ * 4. `query_metric`: Ejecución de consultas analíticas multidimensionales mediante la Query API segura.
+ * 5. `compare_periods`: Comparativa temporal de desempeño.
+ * 6. `get_workforce_hierarchy`: Organigrama y jerarquías laborales.
+ * 7. `list_dashboards`: Tableros e información de widgets publicada.
+ * Garantiza inyección obligatoria de `tenant_id` desde la sesión (`actor.tenantId`) y auditoría con redacción de parámetros sensibles.
+ */
+
 import { randomUUID } from 'node:crypto';
 import type { DataActor, GroundingCitation, ToolExecution } from '@atlas/contracts';
 import type { KpiService } from '@atlas/kpi';
@@ -23,6 +37,7 @@ export interface ToolServices {
 }
 
 export const TOOL_DEFINITIONS: ToolDefinition[] = [
+
   {
     name: 'search_kpis',
     description: 'Busca KPIs y métricas publicadas en el modelo semántico de la organización por nombre, código slug o descripción.',

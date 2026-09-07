@@ -1,3 +1,14 @@
+/**
+ * @file apps/api/src/app.ts
+ * @description Configuración central del módulo NestJS, middleware de seguridad y controladores REST principales (@atlas/api).
+ * Configura:
+ * - Helmet para cabeceras HTTP seguras, cookies HTTP-only con prefijo `__Host-` en producción y SameSite strict.
+ * - Inyección de correlationId para trazabilidad de logs sin filtrar datos personales.
+ * - Controladores principales: Foundation (health/features), Auth (login, MFA, perfil), Semantic (relaciones, KPIs, queries),
+ *   Datasets (ciclo de vida, subidas S3, mapeo) y Dashboards (versiones, filtros operacionales).
+ * - Fábrica `createApp` para instanciación de la aplicación en producción y tests de integración.
+ */
+
 import 'reflect-metadata';
 import { Controller, Get, Post, Patch, Delete, Body, Req, Res, Param, Headers, Inject, Module, HttpCode, type INestApplication } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
@@ -23,6 +34,7 @@ import { WorkforceController } from './workforce/workforce.controller.js';
 import { ConversationsService } from './ai/conversations.service.js';
 import { ConversationsController } from './ai/conversations.controller.js';
 import { AppError, SafeExceptionFilter } from './common/errors.js';
+
 
 const cookieName = () => process.env.NODE_ENV === 'production' ? '__Host-atlas_session' : 'atlas_session';
 function cookieOptions() { return { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict' as const, path: '/' }; }
@@ -258,7 +270,7 @@ export async function createApp(): Promise<INestApplication> {
     }
     next();
   });
-  app.use(json({ limit: '128kb', strict: true }));
+  app.use(json({ limit: '10mb', strict: true }));
   app.use(cookieParser());
   // Feature gates apply to incomplete/future capabilities outside current phase.
   app.use((request: Request, _response: Response, next: NextFunction) => {

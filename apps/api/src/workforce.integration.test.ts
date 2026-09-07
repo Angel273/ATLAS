@@ -1,6 +1,14 @@
+/**
+ * @file apps/api/src/workforce.integration.test.ts
+ * @description Pruebas de integración para el módulo de Workforce / Agent Definer, semanas operativas y RLS.
+ * Valida la creación de semanas operativas ISO, empleados, asignaciones con vigencia temporal (valid_from/valid_to),
+ * jerarquías de supervisión y aislamiento de acceso entre organizaciones.
+ */
+
 import { afterAll, beforeAll, describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { createPool } from '@atlas/database';
+
 import { WorkforceService } from './workforce/workforce.service.js';
 import {
   roleCapabilities,
@@ -86,6 +94,7 @@ describe('Phase 4: Workforce / Agent Definer, Temporal Assignments and RLS', () 
     await workforce.onModuleDestroy();
     await admin.query('DELETE FROM employment_assignments WHERE tenant_id IN ($1, $2)', [tenantA, tenantB]);
     await admin.query('DELETE FROM employee_relationships WHERE tenant_id IN ($1, $2)', [tenantA, tenantB]);
+    await admin.query('DELETE FROM workforce_weeks WHERE tenant_id IN ($1, $2)', [tenantA, tenantB]);
     await admin.query('DELETE FROM employees WHERE tenant_id IN ($1, $2)', [tenantA, tenantB]);
     await admin.query('DELETE FROM teams WHERE tenant_id IN ($1, $2)', [tenantA, tenantB]);
     await admin.query('DELETE FROM employee_types WHERE tenant_id IN ($1, $2)', [tenantA, tenantB]);
@@ -274,4 +283,259 @@ describe('Phase 4: Workforce / Agent Definer, Temporal Assignments and RLS', () 
       )
     ).rejects.toThrow();
   });
+
+  it('manages workforce weeks: creates, updates, queries current and bulk generates', async () => {
+    const week = await workforce.createWeek(
+      adminActor,
+      {
+        weekCode: '2026-W36',
+        yearNumber: 2026,
+        weekNumber: 36,
+        startDate: '2026-08-31',
+        status: 'current',
+        customAttributes: { headcountTarget: 120, isPeak: false },
+      },
+      randomUUID(),
+      randomUUID()
+    );
+
+    expect(week.id).toBeDefined();
+    expect(week.weekCode).toBe('2026-W36');
+    expect(week.startDate).toBe('2026-08-31');
+    expect(week.endDate).toBe('2026-09-06'); // Exactly Monday + 6 days
+    expect(week.status).toBe('current');
+    expect(week.customAttributes).toEqual({ headcountTarget: 120, isPeak: false });
+
+    // Current week query
+    const current = await workforce.getCurrentWeek(supervisorActor);
+    expect(current).not.toBeNull();
+    expect(current?.weekCode).toBe('2026-W36');
+
+    // Update status and custom attributes
+    const updated = await workforce.updateWeek(
+      adminActor,
+      week.id,
+      {
+        status: 'closed',
+        customAttributes: { actualHeadcount: 118, isPeak: true },
+      },
+      randomUUID()
+    );
+    expect(updated.status).toBe('closed');
+    expect(updated.customAttributes.actualHeadcount).toBe(118);
+    expect(updated.customAttributes.headcountTarget).toBe(120); // Merged attributes
+
+    // Bulk generate year weeks
+    const all2026 = await workforce.generateYearWeeks(adminActor, 2026, randomUUID());
+    expect(all2026.items.length).toBeGreaterThanOrEqual(52);
+    expect(all2026.items.some(w => w.weekCode === '2026-W01')).toBe(true);
+  });
+
+  it('supports bms_id, wave, custom_fields and computed normalized_name on employees', async () => {
+    const employee = await workforce.createEmployee(
+      adminActor,
+      {
+        code: 'AGT-202',
+        firstName: '  Maria   Jose ',
+        lastName: '  Lopez   Morales  ',
+        bmsId: 'BMS-9988',
+        wave: 'Wave 12',
+        customFields: { site: 'Guatemala Site 1', modality: 'remoto' },
+        employeeTypeId: agentTypeId,
+        teamId: teamAlphaId,
+      },
+      randomUUID(),
+      randomUUID()
+    );
+
+    expect(employee.code).toBe('AGT-202');
+    expect(employee.bmsId).toBe('BMS-9988');
+    expect(employee.wave).toBe('Wave 12');
+    expect(employee.normalizedName).toBe('MARIA JOSE LOPEZ MORALES');
+    expect(employee.customFields).toEqual({ site: 'Guatemala Site 1', modality: 'remoto' });
+
+    // Search by bms_id
+    const searchByBms = await workforce.listEmployees(supervisorActor, { search: 'BMS-9988' });
+    expect(searchByBms.items.length).toBe(1);
+    expect(searchByBms.items[0]?.code).toBe('AGT-202');
+
+    // Search by normalized name
+    const searchByName = await workforce.listEmployees(supervisorActor, { search: 'maria jose' });
+    expect(searchByName.items.length).toBe(1);
+    expect(searchByName.items[0]?.code).toBe('AGT-202');
+  });
+
+  it('links assignments and relationships to operational weeks and FM hierarchy', async () => {
+    const week = await workforce.createWeek(
+      adminActor,
+      {
+        weekCode: '2026-W37',
+        yearNumber: 2026,
+        weekNumber: 37,
+        startDate: '2026-09-07',
+        status: 'open',
+      },
+      randomUUID(),
+      randomUUID()
+    );
+
+    // Create Floor Manager relationship
+    const relationship = await workforce.createRelationship(
+      adminActor,
+      {
+        employeeId: agentEmployeeId,
+        managerId: supervisorEmployeeId,
+        relationType: 'floor_manager',
+        weekId: week.id,
+      },
+      randomUUID(),
+      randomUUID()
+    );
+    expect(relationship.relationType).toBe('floor_manager');
+    expect(relationship.weekId).toBe(week.id);
+    expect(relationship.weekCode).toBe('2026-W37');
+
+    // Create assignment linked to week and metadata
+    const assignment = await workforce.createAssignment(
+      adminActor,
+      {
+        employeeId: agentEmployeeId,
+        employeeTypeId: agentTypeId,
+        teamId: teamAlphaId,
+        weekId: week.id,
+        metadata: { weeklyShift: 'Morning A', contractedHours: 40 },
+      },
+      randomUUID(),
+      randomUUID()
+    );
+    expect(assignment.weekId).toBe(week.id);
+    expect(assignment.weekCode).toBe('2026-W37');
+    expect(assignment.metadata).toEqual({ weeklyShift: 'Morning A', contractedHours: 40 });
+  });
+
+  it('generates an official Excel template for team and roster import', async () => {
+    const templateBuffer = await workforce.getTeamTemplate(supervisorActor);
+    expect(templateBuffer).toBeInstanceOf(Buffer);
+    expect(templateBuffer.length).toBeGreaterThan(1000);
+    // XLSX magic bytes: PK\x03\x04 (zip archive)
+    expect(templateBuffer[0]).toBe(0x50);
+    expect(templateBuffer[1]).toBe(0x4B);
+  });
+
+  it('imports teams and employee roster from Excel/CSV with dryRun preview and transactional execution', async () => {
+    const week = await workforce.createWeek(
+      adminActor,
+      {
+        weekCode: '2026-W38',
+        yearNumber: 2026,
+        weekNumber: 38,
+        startDate: '2026-09-14',
+        status: 'open',
+      },
+      randomUUID(),
+      randomUUID()
+    );
+
+    const csvContent = [
+      'Equipo,Codigo_Empleado,Nombres,Apellidos,Email,BMS_ID,Wave,Rol,Supervisor,Semana_Operativa',
+      'Cobranzas Early,SUP-COB-01,Marcos,Valle,m.valle@example.invalid,BMS-880,Wave 08,Supervisor,,2026-W38',
+      'Cobranzas Early,AG-COB-10,Elena,Rios,e.rios@example.invalid,BMS-881,Wave 14,Asesor,SUP-COB-01,2026-W38',
+      'Cobranzas Early,AG-COB-11,David,Cruz,d.cruz@example.invalid,BMS-882,Wave 14,Asesor,SUP-COB-01,2026-W38',
+      'Retenciones VIP,AG-RET-20,Sofia,Lara,s.lara@example.invalid,BMS-771,Wave 12,Asesor,,2026-W38',
+      'Retenciones VIP,AG-RET-21,Mateo,Rojas,m.rojas@example.invalid,BMS-772,Wave 12,Asesor,,2026-W38',
+      'Equipo Vacio Sin Agentes,,,,,,,,,',
+    ].join('\n');
+
+    const base64Content = Buffer.from(csvContent, 'utf-8').toString('base64');
+
+    // 1. Dry run preview (should NOT mutate database)
+    const preview = await workforce.importTeamsFromExcel(
+      adminActor,
+      {
+        filename: 'roster_import_test.csv',
+        base64Content,
+        defaultWeekId: week.id,
+        dryRun: true,
+      },
+      randomUUID()
+    );
+
+    expect(preview.dryRun).toBe(true);
+    expect(preview.teamsCreated).toBe(3); // Cobranzas Early, Retenciones VIP, Equipo Vacio Sin Agentes
+    expect(preview.teamsFound).toBe(0);
+    expect(preview.employeesCreated).toBe(5);
+    expect(preview.assignmentsCreated).toBe(5);
+    expect(preview.supervisorsLinked).toBe(2);
+    expect(preview.teamsSummary.length).toBe(3);
+
+    // Verify DB was NOT mutated
+    const teamsBefore = await workforce.listTeams(adminActor);
+    const existingCobranzas = teamsBefore.items.find(t => t.name === 'Cobranzas Early');
+    expect(existingCobranzas).toBeUndefined();
+
+    // 2. Real execution (dryRun: false)
+    const execution = await workforce.importTeamsFromExcel(
+      adminActor,
+      {
+        filename: 'roster_import_test.csv',
+        base64Content,
+        defaultWeekId: week.id,
+        dryRun: false,
+      },
+      randomUUID()
+    );
+
+    expect(execution.dryRun).toBe(false);
+    expect(execution.teamsCreated).toBe(3);
+    expect(execution.employeesCreated).toBe(5);
+    expect(execution.assignmentsCreated).toBe(5);
+    expect(execution.supervisorsLinked).toBe(2);
+
+    // Verify teams in DB
+    const teamsAfter = await workforce.listTeams(adminActor);
+    const cobranzasTeam = teamsAfter.items.find(t => t.name === 'Cobranzas Early');
+    const retencionesTeam = teamsAfter.items.find(t => t.name === 'Retenciones VIP');
+    const emptyTeam = teamsAfter.items.find(t => t.name === 'Equipo Vacio Sin Agentes');
+
+    expect(cobranzasTeam).toBeDefined();
+    expect(retencionesTeam).toBeDefined();
+    expect(emptyTeam).toBeDefined();
+
+    // Verify employees created with BMS ID, Wave and normalized name
+    const elenaEmp = (await workforce.listEmployees(adminActor, { search: 'AG-COB-10' })).items[0];
+    expect(elenaEmp).toBeDefined();
+    expect(elenaEmp?.firstName).toBe('Elena');
+    expect(elenaEmp?.bmsId).toBe('BMS-881');
+    expect(elenaEmp?.wave).toBe('Wave 14');
+    expect(elenaEmp?.normalizedName).toBe('ELENA RIOS');
+    expect(elenaEmp?.currentTeamName).toBe('Cobranzas Early');
+    expect(elenaEmp?.currentManagerName).toBe('Marcos Valle');
+
+    // Verify assignments linked to week
+    const elenaAssignments = await workforce.listAssignments(adminActor, elenaEmp!.id);
+    expect(elenaAssignments.items.length).toBe(1);
+    expect(elenaAssignments.items[0]?.weekId).toBe(week.id);
+    expect(elenaAssignments.items[0]?.weekCode).toBe('2026-W38');
+
+    // 3. Idempotency test (re-importing should update/find existing without errors or duplicates)
+    const reImport = await workforce.importTeamsFromExcel(
+      adminActor,
+      {
+        filename: 'roster_import_test.csv',
+        base64Content,
+        defaultWeekId: week.id,
+        dryRun: false,
+      },
+      randomUUID()
+    );
+    expect(reImport.teamsCreated).toBe(0);
+    expect(reImport.teamsFound).toBe(3);
+    expect(reImport.employeesCreated).toBe(0);
+    expect(reImport.employeesUpdated).toBe(5);
+
+    // 4. Multi-tenant isolation: Tenant B must not see Tenant A's imported teams
+    const tenantBTeams = await workforce.listTeams(otherTenantActor);
+    expect(tenantBTeams.items.find(t => t.name === 'Cobranzas Early')).toBeUndefined();
+  });
 });
+

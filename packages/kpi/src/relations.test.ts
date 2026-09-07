@@ -1,5 +1,12 @@
+/**
+ * @file packages/kpi/src/relations.test.ts
+ * @description Pruebas unitarias para la resolución de rutas de JOIN en grafos semánticos,
+ * detección de ciclos en dependencias de KPIs y evaluación de metas operativas.
+ */
+
 import { describe, it, expect } from 'vitest';
 import { resolveJoinPaths, detectKpiCycles, evaluateTarget, type RelationshipRecord, type DatasetNode } from './relations.js';
+
 
 describe('relations and multi-table graph routing', () => {
   const rootNode: DatasetNode = { id: 'ds-calls', slug: 'calls', versionId: 'v-calls-1' };

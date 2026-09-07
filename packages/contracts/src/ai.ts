@@ -1,6 +1,15 @@
+/**
+ * @file packages/contracts/src/ai.ts
+ * @description Esquemas y contratos Zod para el módulo de IA Multi-Proveedor (AI Chat Operacional).
+ * Define roles de mensaje, tipología de afirmaciones y citas verificadas (grounding context con kpiVersionId,
+ * datasetVersionId, hash de consulta), esquema de conversaciones, turnos, ejecuciones de herramientas
+ * de solo lectura auditadas y sanitización estricta de parámetros sin filtración de datos confidenciales.
+ */
+
 import { z } from 'zod';
 
 export const messageRoleSchema = z.enum(['user', 'assistant', 'system', 'tool']);
+
 export type MessageRole = z.infer<typeof messageRoleSchema>;
 
 export const factTypeSchema = z.enum(['fact', 'calculation', 'interpretation', 'structure']);

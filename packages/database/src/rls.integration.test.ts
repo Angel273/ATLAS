@@ -1,6 +1,15 @@
+/**
+ * @file packages/database/src/rls.integration.test.ts
+ * @description Suite de pruebas de integración con PostgreSQL real para Row-Level Security (RLS).
+ * Valida el comportamiento de roles no privilegiados (`atlas_app`, `atlas_auth`), denegación de consultas
+ * sin contexto de tenant, aislamiento estricto entre Tenants A y B, protección contra inserciones/actualizaciones
+ * cruzadas y la naturaleza inmutable append-only de los eventos de auditoría (`audit_events`).
+ */
+
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { createPool, withTenant, withIdentity } from './index.js';
+
 
 describe('PostgreSQL RLS with actual restricted roles', () => {
   const admin = createPool(process.env.ADMIN_DATABASE_URL);

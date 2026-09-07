@@ -1,5 +1,13 @@
+/**
+ * @file packages/database/src/prepare-test.ts
+ * @description Script de inicialización de la base de datos de pruebas (`atlas_test`).
+ * Garantiza que la ejecución sea en entorno local, crea la base de datos si no existe
+ * y ejecuta el pipeline de migraciones para dejar el entorno de integración listo.
+ */
+
 import './environment.js';
 import { createPool } from './index.js';
+
 const original = process.env.ADMIN_DATABASE_URL;
 if (!original) throw new Error('DATABASE_CONFIGURATION_REQUIRED');
 const url = new URL(original);

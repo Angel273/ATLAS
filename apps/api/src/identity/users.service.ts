@@ -1,3 +1,11 @@
+/**
+ * @file apps/api/src/identity/users.service.ts
+ * @description Servicio de gestión de usuarios, perfiles, credenciales y membresías (UsersService) en ATLAS.
+ * Permite a los administradores listar miembros, invitar y crear nuevos usuarios con roles asignados,
+ * actualizar perfiles, cambiar contraseñas, resetear MFA, deshabilitar cuentas y gestionar el rol de cada miembro.
+ * Implementa bloqueos transaccionales (`pg_advisory_xact_lock`) para garantizar que nunca quede una organización sin administradores activos.
+ */
+
 import { z } from 'zod';
 import { withIdentity, type PoolClient } from '@atlas/database';
 import {
@@ -12,8 +20,12 @@ import { AuthService, requireCapability, type Principal } from './auth.service.j
 import { hashPassword, verifyPassword } from './crypto.js';
 import { AppError } from '../common/errors.js';
 
+/**
+ * Servicio de administración de cuentas de usuario, membresías y perfiles.
+ */
 export class UsersService {
   constructor(private readonly auth: AuthService) {}
+
 
   private async transaction<T>(principal: Principal, action: (client: PoolClient) => Promise<T>) {
     requireCapability(principal, 'user.manage');

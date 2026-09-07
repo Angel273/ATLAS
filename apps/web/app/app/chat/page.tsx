@@ -1,3 +1,10 @@
+/**
+ * @file page.tsx
+ * @description Interfaz de usuario para AI Chat Asistido y Operacional en ATLAS.
+ * Proporciona un chat interactivo multi-proveedor (Gemini / Mock Determinista) con 7 herramientas de solo lectura,
+ * trazabilidad auditada de llamadas a tools, tarjetas de evidencia (grounding) y límite duro de 5 turnos.
+ */
+
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
@@ -35,6 +42,7 @@ import {
   type GroundingCitation,
 } from '@atlas/contracts';
 
+/** Formatea texto plano con sintaxis markdown básica (negritas y código en línea). */
 function formatLineContent(text: string) {
   const parts = text.split(/(\*\*.*?\*\*|`.*?`)/g);
   return parts.map((part, i) => {
@@ -84,6 +92,9 @@ const SUGGESTED_PROMPTS = [
   },
 ];
 
+/**
+ * Componente principal de página para el asistente operacional AI Chat.
+ */
 export default function ChatPage() {
   const router = useRouter();
   const [session, setSession] = useState<Session | null>(null);

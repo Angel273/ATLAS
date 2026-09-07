@@ -1,3 +1,9 @@
+/**
+ * @file cycle-detection.test.ts
+ * @description Pruebas unitarias para el algoritmo de detección de ciclos en dependencias de KPIs.
+ * Valida autorreferencias, dependencias acíclicas válidas y ciclos transitivos profundos.
+ */
+
 import { describe, it, expect } from 'vitest';
 import { wouldIntroduceCycle } from './cycle-detection';
 

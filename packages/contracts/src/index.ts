@@ -1,9 +1,19 @@
+/**
+ * @file packages/contracts/src/index.ts
+ * @description Punto de entrada principal y exportación unificada del paquete de contratos (@atlas/contracts).
+ * Define los esquemas Zod y tipos TypeScript para la gestión de identidad, roles del sistema,
+ * capacidades (RBAC), sesiones, perfiles de usuario, administración multi-tenant, cuentas operacionales,
+ * respuestas de error estructuradas y flags de características. Re-exporta además los contratos de datos,
+ * KPIs, dashboards, workforce y modelos de inteligencia artificial.
+ */
+
 import { z } from 'zod';
 export * from './data.js';
 export * from './kpi.js';
 export * from './dashboard.js';
 export * from './workforce.js';
 export * from './ai.js';
+
 
 export const roleSchema = z.enum(['admin', 'supervisor', 'floor_manager', 'quality_coordinator', 'operations_manager', 'ceo']);
 export type Role = z.infer<typeof roleSchema>;

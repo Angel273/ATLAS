@@ -1,29 +1,75 @@
+/**
+ * @file packages/ingestion/src/repository.ts
+ * @description Servicio transaccional de ingesta y ciclo de vida de Datasets (@atlas/ingestion).
+ * Controla el ciclo dual de datasets (borrado definitivo para borradores no publicados vs archivo lógico
+ * respaldado por triggers de PostgreSQL `23514` para versiones publicadas), generación de URLs firmadas S3,
+ * confirmación de uploads, mapeo semántico de campos, desduplicación por hash, previsualización, auditoría y publicación inmutable.
+ */
+
 import { z } from 'zod';
 import { createPool, withTenant, type PoolClient } from '@atlas/database';
 import { actorSchema, DomainError, datasetCreateSchema, datasetListSchema, datasetSchema, versionSchema, versionListSchema, uploadCreateSchema, uploadResultSchema, mappingSchema, dataPreviewSchema, issueReportSchema, type DataActor, type DatasetVersion } from '@atlas/contracts';
 import { ObjectStorage } from './storage.js';
 import { ImportQueue } from './queue.js';
 
+/**
+ * Valida que el actor autenticado posea la capacidad (permiso RBAC) requerida para la acción.
+ *
+ * @param actor Contexto del usuario con roles y capacidades.
+ * @param capability Nombre de la capacidad a verificar (ej. `dataset.manage`, `dataset.read`).
+ * @throws DomainError con código FORBIDDEN y status 403 si carece del permiso.
+ */
 export function permit(actor: DataActor, capability: string) {
   actorSchema.parse(actor);
   if (!actor.capabilities.includes(capability)) throw new DomainError('FORBIDDEN', 403, 'No tienes permiso para realizar esta acción.');
 }
 export const versionSelect = `SELECT id,dataset_id AS "datasetId",number,filename,bytes::int,regional,state,sha256,profile,mapping,row_count::float8 AS rows,issues,issue_count AS "issueCount",error_code AS "errorCode",published_at::text AS "publishedAt",created_at::text AS "createdAt",progress FROM dataset_versions`;
 const datasetSelect = `SELECT id,name,slug,current_version_id AS "currentVersionId",archived_at::text AS "archivedAt",created_at::text AS "createdAt" FROM datasets`;
+
+/**
+ * Busca y valida el registro de una versión de dataset por su ID.
+ *
+ * @param client Cliente transaccional de PostgreSQL con tenant_id establecido.
+ * @param id UUID de la versión.
+ * @returns Estructura validada de DatasetVersion.
+ */
 export async function findVersion(client: PoolClient, id: string): Promise<DatasetVersion> {
   z.uuid().parse(id); const result = await client.query(`${versionSelect} WHERE id=$1`, [id]);
   if (!result.rows[0]) throw new DomainError('VERSION_NOT_FOUND', 404, 'Versión no encontrada.');
   return versionSchema.parse(result.rows[0]);
 }
+
+/**
+ * Registra un evento auditable append-only en la tabla `audit_events`.
+ *
+ * @param client Cliente PostgreSQL activo.
+ * @param actor Usuario responsable de la acción.
+ * @param event Nombre canónico del evento.
+ * @param target ID del recurso afectado.
+ * @param correlation ID de correlación de la solicitud HTTP o job.
+ */
 export async function audit(client: PoolClient, actor: DataActor, event: string, target: string, correlation: string) {
   await client.query('INSERT INTO audit_events(tenant_id,actor_id,event,target_id,correlation_id) VALUES ($1,$2,$3,$4,$5)', [actor.tenantId, actor.userId, event, target, correlation]);
 }
+
+/**
+ * Servicio central para la ingesta, versionado y administración de datasets.
+ */
 export class IngestionService {
   readonly pool = createPool(process.env.DATABASE_URL);
   readonly storage = new ObjectStorage();
   readonly jobs = new ImportQueue();
+
+  /**
+   * Inicializa el bucket de almacenamiento S3.
+   */
   async onModuleInit() { await this.storage.initialize(); }
+
+  /**
+   * Cierra ordenadamente conexiones de base de datos, colas Redis y cliente S3.
+   */
   async onModuleDestroy() { await Promise.all([this.pool.end(), this.jobs.close()]); this.storage.close(); }
+
   async list(actor: DataActor, includeArchived = false) {
     permit(actor, 'dataset.read');
     const where = includeArchived ? '' : 'WHERE archived_at IS NULL';

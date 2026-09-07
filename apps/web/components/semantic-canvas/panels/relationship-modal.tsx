@@ -1,3 +1,10 @@
+/**
+ * @file relationship-modal.tsx
+ * @description Modal interactivo para crear o editar relaciones semánticas entre campos de datasets.
+ * Permite configurar datasets origen/destino, campos de unión, tipo de JOIN (LEFT/INNER),
+ * cardinalidad (1:1, 1:N, N:1) y marcar la relación como camino preferido.
+ */
+
 'use client';
 import { useState, useEffect, type FormEvent } from 'react';
 import { GitMerge, Check, AlertCircle, Star, X } from 'lucide-react';
@@ -21,6 +28,9 @@ interface RelationshipModalProps {
   canManage: boolean;
 }
 
+/**
+ * Componente modal para definir y almacenar relaciones semánticas entre entidades.
+ */
 export function RelationshipModal({
   isOpen,
   onClose,

@@ -1,8 +1,19 @@
+/**
+ * @file apps/web/components/trend-chart.tsx
+ * @description Gráfico interactivo ECharts de tendencia semanal de nivel de servicio (@atlas/web).
+ * Renderiza mediante SVG accesible con soporte para reducción de movimiento (`prefers-reduced-motion`),
+ * redimensionamiento responsivo con ResizeObserver y alternativa textual según WCAG 2.2 AA.
+ */
+
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import { sampleTrend } from '../lib/sample-data';
 
+/**
+ * Componente de gráfico de línea para visualización comparativa de tendencias operacionales.
+ */
 export function TrendChart() {
+
   const ref = useRef<HTMLDivElement>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {

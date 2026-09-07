@@ -1,9 +1,27 @@
+/**
+ * @file packages/kpi/src/dsl.ts
+ * @description Parser y compilador de la DSL de fórmulas analíticas para KPIs gobernados en ATLAS.
+ * Convierte expresiones textuales en un Árbol de Sintaxis Abstracta (AST) fuertemente tipado y lo compila
+ * a fragmentos SQL parametrizados compatibles con PostgreSQL.
+ * Soporta funciones de agregación (SUM, AVG, MIN, MAX, COUNT, COUNT_DISTINCT), condicionales (IF, COALESCE, NULLIF),
+ * matemáticas (ROUND, ABS), manipulación temporal (DATE, DATE_DIFF, DATE_TRUNC) y navegación multidimensional multi-dataset.
+ */
+
 import { DomainError, type SourceField } from '@atlas/contracts';
 type Scalar = 'numeric' | 'string' | 'boolean' | 'date' | 'datetime' | 'null';
 export type Ast = { kind: 'literal'; value: string | boolean | null; type: Scalar } | { kind: 'field'; name: string } | { kind: 'call'; name: string; args: Ast[] } | { kind: 'binary'; op: string; left: Ast; right: Ast } | { kind: 'unary'; op: string; value: Ast };
 const fail = (code = 'INVALID_FORMULA'): never => { throw new DomainError(code, 400, 'Fórmula inválida: revisa funciones, campos, tipos y agregaciones.'); };
 type Token = { text: string; kind: 'word' | 'number' | 'string' | 'symbol' };
+
+/**
+ * Parsea el texto de una fórmula en la sintaxis segura de ATLAS generando un AST tipado.
+ * Aplica límites de recursión (profundidad máx 30, máx 200 nodos, máx 500 tokens).
+ *
+ * @param text Cadena de texto que contiene la fórmula (ej: `SUM(llamadas) / NULLIF(SUM(tiempo), 0)`).
+ * @returns Árbol de sintaxis abstracta (Ast).
+ */
 export function parseFormula(text: string): Ast {
+
   if (!text.length || text.length > 4000) return fail('FORMULA_LIMIT');
   const tokens: Token[] = []; let offset = 0;
   while (offset < text.length) {
@@ -47,6 +65,13 @@ export type TableContext = {
   fields: readonly SourceField[];
 };
 
+/**
+ * Recorre recursivamente un AST de fórmula para extraer los slugs de tablas
+ * o datasets explícitamente calificados en las referencias a campos (ej: `ventas.monto`).
+ *
+ * @param ast Árbol sintáctico de la fórmula.
+ * @returns Lista de nombres/slugs de datasets referenciados.
+ */
 export function extractReferencedTables(ast: Ast): string[] {
   const tables = new Set<string>();
   function walk(node: Ast) {
@@ -67,12 +92,24 @@ export function extractReferencedTables(ast: Ast): string[] {
 
 type Compiled = { sql: string; type: Scalar; aggregate: boolean; row: boolean };
 
+/**
+ * Compila un AST de fórmula a una expresión SQL parametrizada de PostgreSQL.
+ * Valida reglas semánticas: tipos compatibles, aridad de funciones, obligatoriedad de agregación
+ * en el nivel superior y prevención de agregaciones anidadas.
+ *
+ * @param ast Árbol sintáctico de la fórmula.
+ * @param fieldsOrTables Definición de campos o contextos de tablas con alias.
+ * @param table Slug del dataset base principal.
+ * @param parameters Vector mutable donde se insertan los valores parametrizados ($1, $2, ...).
+ * @returns Objeto con fragmento SQL seguro, bandera indicadora de divisiones por cero y tablas referenciadas.
+ */
 export function compileFormula(
   ast: Ast,
   fieldsOrTables: readonly SourceField[] | TableContext[],
   table: string,
   parameters: unknown[]
 ): { sql: string; hasDivision: boolean; referencedTables: string[] } {
+
   const isTableContextArray = (items: readonly unknown[]): items is TableContext[] =>
     items.length > 0 && typeof items[0] === 'object' && items[0] !== null && 'alias' in items[0];
 

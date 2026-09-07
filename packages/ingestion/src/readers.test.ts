@@ -1,3 +1,10 @@
+/**
+ * @file packages/ingestion/src/readers.test.ts
+ * @description Pruebas unitarias para lectores de hojas de cálculo y desinfección de encabezados.
+ * Valida la lectura streaming de XLSX, manejo seguro de valores cacheados de fórmulas,
+ * celdas vacías y desambiguación determinista de nombres de columna duplicados.
+ */
+
 import {it,expect} from 'vitest';
 import ExcelJS from 'exceljs';
 import {mkdtemp,rm,rmdir} from 'node:fs/promises';
@@ -6,6 +13,7 @@ import {join} from 'node:path';
 import {readRows} from './readers.js';
 import {sanitizeHeaders} from './processor.js';
 import type {Regional} from '@atlas/contracts';
+
 const regional:Regional={decimalSeparator:'.',thousandsSeparator:'none',dateFormat:'YYYY-MM-DD',timezone:'UTC',delimiter:','};
 it('streams XLSX sheets, preserves empty cells and uses only cached formula values',async()=>{
  const directory=await mkdtemp(join(tmpdir(),'atlas-reader-test-'));

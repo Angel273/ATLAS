@@ -1,7 +1,16 @@
+/**
+ * @file packages/database/src/migrate.ts
+ * @description Ejecutor determinista e idempotente de migraciones SQL para ATLAS.
+ * Adquiere un bloqueo asesor de nivel de base de datos (`pg_advisory_lock`), verifica la integridad
+ * de checksums SHA-256 en `public.schema_migrations`, aplica incrementalmente los archivos `.sql`
+ * y provisiona contraseñas seguras para los roles dedicados de PostgreSQL (`atlas_app` y `atlas_auth`).
+ */
+
 import './environment.js';
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { createPool } from './index.js';
+
 
 const pool = createPool(process.env.ADMIN_DATABASE_URL);
 const client = await pool.connect();

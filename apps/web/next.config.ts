@@ -1,5 +1,13 @@
+/**
+ * @file apps/web/next.config.ts
+ * @description Configuración de Next.js para la aplicación frontend de ATLAS (@atlas/web).
+ * Configura transpilación del monorepo (`@atlas/contracts`), proxies inversos `/api/v1/:path*` hacia el backend NestJS
+ * y cabeceras de seguridad HTTP (HSTS, nosniff, DENY frame options, Permissions-Policy).
+ */
+
 import type { NextConfig } from 'next';
 const config: NextConfig = {
+
   distDir: process.env.ATLAS_NEXT_DIST_DIR ?? '.next',
   transpilePackages: ['@atlas/contracts'],
   poweredByHeader: false,

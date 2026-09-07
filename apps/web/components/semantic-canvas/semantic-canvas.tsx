@@ -1,3 +1,10 @@
+/**
+ * @file semantic-canvas.tsx
+ * @description Lienzo visual interactivo basado en ReactFlow (@xyflow/react) para modelar la capa semántica.
+ * Permite visualizar el diagrama entidad-relación (ERD), relaciones entre datasets, nodos de KPIs y sus dependencias,
+ * simular rutas de JOINs y construir fórmulas de manera visual e interactiva.
+ */
+
 'use client';
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import {
@@ -81,6 +88,9 @@ interface SemanticCanvasProps {
   onRefresh: () => Promise<void>;
 }
 
+/**
+ * Componente interno del lienzo semántico que gestiona el estado de nodos, aristas, conexiones y modales.
+ */
 function InnerSemanticCanvas({
   sources,
   relationships,
@@ -678,6 +688,9 @@ function InnerSemanticCanvas({
   );
 }
 
+/**
+ * Componente principal SemanticCanvas envuelto en ReactFlowProvider para soportar el contexto de flujo.
+ */
 export function SemanticCanvas(props: SemanticCanvasProps) {
   return (
     <ReactFlowProvider>

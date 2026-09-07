@@ -1,8 +1,16 @@
+/**
+ * @file apps/api/src/bootstrap-local.ts
+ * @description Script de inicialización rápida para el entorno de desarrollo local.
+ * Crea la organización de prueba 'ATLAS · Desarrollo local', genera credenciales aleatorias seguras
+ * para el administrador local y las almacena de forma privada en `.local/admin-access.md`.
+ */
+
 import { randomBytes } from 'node:crypto';
 import { mkdir, writeFile, unlink } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { createPool } from '@atlas/database';
 import { hashPassword } from './identity/crypto.js';
+
 
 const database = new URL(process.env.ADMIN_DATABASE_URL ?? '');
 if (process.env.NODE_ENV !== 'development' || !['127.0.0.1', 'localhost'].includes(database.hostname) || database.pathname !== '/atlas') throw new Error('LOCAL_BOOTSTRAP_ONLY');

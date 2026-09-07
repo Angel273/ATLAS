@@ -1,3 +1,13 @@
+/**
+ * @file apps/api/src/ai/conversations.service.ts
+ * @description Orquestador del asistente conversacional de Inteligencia Operacional (@atlas/api).
+ * Gestiona el ciclo de interacción interactiva:
+ * - Límite estricto de seguridad de 5 turnos de ejecución de herramientas por mensaje.
+ * - Inyección automática e inmutable del `tenant_id` y rol del usuario autenticado.
+ * - Ejecución auditada de herramientas de solo lectura con cálculo de latencias (`duration_ms`).
+ * - Generación de citas verificadas (`grounding_context`) vinculando respuestas con datos y modelos semánticos reales.
+ */
+
 import { z } from 'zod';
 import { createPool, withTenant, type Pool } from '@atlas/database';
 import {
@@ -24,9 +34,13 @@ const convSelect = `SELECT id, tenant_id AS "tenantId", user_id AS "userId", tit
 const msgSelect = `SELECT id, conversation_id AS "conversationId", role, content, grounding_context AS "groundingContext", tokens_used AS "tokensUsed", created_at::text AS "createdAt" FROM conversation_messages`;
 const toolExecSelect = `SELECT id, conversation_id AS "conversationId", message_id AS "messageId", tool_name AS "toolName", parameters_redacted AS "parametersRedacted", result_summary AS "resultSummary", duration_ms AS "durationMs", status, created_at::text AS "createdAt" FROM conversation_tool_executions`;
 
+/**
+ * Servicio de orquestación de conversaciones con IA y ejecución gobernada de tools.
+ */
 export class ConversationsService {
   readonly pool: Pool = createPool(process.env.DATABASE_URL);
   private readonly toolServices: ToolServices;
+
 
   constructor(
     kpi: KpiService,

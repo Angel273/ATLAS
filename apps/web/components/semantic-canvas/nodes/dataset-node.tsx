@@ -1,9 +1,19 @@
+/**
+ * @file dataset-node.tsx
+ * @description Nodo visual tipo ERD para datasets en el Lienzo Semántico.
+ * Muestra metadatos del dataset, columnas normalizadas, tipos de datos, llaves primarias
+ * y conectores (handles) a nivel de campo para establecer relaciones entre tablas.
+ */
+
 'use client';
 import { memo, useState } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { Database, Key, Hash, Calendar, Clock, Type, ToggleLeft, Layers, Plus, Search } from 'lucide-react';
 import type { DatasetNodeData, FieldType } from '../types';
 
+/**
+ * Renderiza una etiqueta visual compacta con icono y color según el tipo de datos del campo.
+ */
 function FieldTypeBadge({ type }: { type: FieldType }) {
   switch (type) {
     case 'integer':
@@ -52,6 +62,9 @@ function FieldTypeBadge({ type }: { type: FieldType }) {
   }
 }
 
+/**
+ * Componente de nodo ReactFlow para representar un dataset y sus columnas con handles de conexión.
+ */
 export const DatasetNode = memo(function DatasetNode({ data, selected }: NodeProps) {
   const nodeData = data as unknown as DatasetNodeData;
   const [filter, setFilter] = useState('');

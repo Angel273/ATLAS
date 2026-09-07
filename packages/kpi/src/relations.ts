@@ -1,4 +1,13 @@
+/**
+ * @file packages/kpi/src/relations.ts
+ * @description Motor de resolución de grafo semántico, cálculo de JOINs deterministas y evaluación de metas operativas.
+ * Implementa el algoritmo de búsqueda en anchura (BFS) para enlazar datasets evitando ciclos o productos cartesianos,
+ * priorizando relaciones marcadas como preferidas y resolviendo cardinalidades.
+ * Contiene además la validación DFS de dependencias circulares entre KPIs y la evaluación de semáforos de cumplimiento (bueno, advertencia, crítico).
+ */
+
 import { DomainError, type Cardinality, type JoinType, type TargetDirection, type KpiTargets } from '@atlas/contracts';
+
 
 export type RelationshipRecord = {
   id: string;

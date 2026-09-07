@@ -1,8 +1,22 @@
+/**
+ * @file packages/ingestion/src/worker.ts
+ * @description Supervisor de tareas de fondo BullMQ para ingesta masiva.
+ * Despacha cada job a un hilo de trabajo aislado (`WorkerThread`) con límites de memoria física (512 MB de heap)
+ * y temporizador de interrupción (timeout de 10 minutos) para evitar bloqueos del proceso principal.
+ */
+
 import { Worker as Thread } from 'node:worker_threads';
 import { Worker } from 'bullmq';
 import { queueName, redisConnection, verifyTask } from './queue.js';
 import { failImport } from './processor.js';
+
+/**
+ * Inicia el consumidor BullMQ que escucha tareas de la cola de ingesta con concurrencia controlada (2 hilos concurrentes).
+ *
+ * @returns Instancia activa del Worker de BullMQ.
+ */
 export function startImportWorker() {
+
   const worker = new Worker(queueName, async job => {
     const task = verifyTask(job.data);
     try {

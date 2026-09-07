@@ -1,3 +1,10 @@
+/**
+ * @file workspace.tsx
+ * @description Componente de demostración y espacio de trabajo interactivo inicial de ATLAS.
+ * Presenta datos operacionales sintéticos (llamadas, AHT, nivel de servicio, calidad)
+ * para explorar dashboards, navegación entre secciones y exportación de muestras en CSV.
+ */
+
 'use client';
 import { useState } from 'react';
 import Link from 'next/link';
@@ -9,8 +16,14 @@ import { TrendChart } from './trend-chart';
 type Section = 'dashboard' | 'datasets' | 'kpis' | 'workforce' | 'chat' | 'settings';
 const titles: Record<Section, string> = { dashboard: 'Resumen operacional', datasets: 'Datasets', kpis: 'KPI Structure', workforce: 'Directorio de equipos', chat: 'Análisis asistido', settings: 'Administración' };
 
+/**
+ * Renderiza el logotipo y nombre de marca ATLAS con enlace a la raíz.
+ */
 export function Brand() { return <Link href="/" className="brand" aria-label="ATLAS, inicio"><svg className="brand-symbol" viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M3 28 15.7 3 29 28M8 18h16M10 28l6-12 6 12" stroke="currentColor" strokeWidth="1.6" /></svg><span className="brand-word">ATLAS</span><sup>®</sup></Link>; }
 
+/**
+ * Renderiza el espacio de trabajo de demostración con métricas agregadas, filtros y navegación.
+ */
 export function Workspace() {
   const [section, setSection] = useState<Section>('dashboard');
   const [account, setAccount] = useState('all');
@@ -23,7 +36,11 @@ export function Workspace() {
   const totals = aggregate(teams);
   const values = [percent(totals.serviceLevel), numberFormat.format(totals.calls), duration(totals.aht), percent(totals.quality)];
   const selectedDefinition = detail === null ? null : kpiDefinitions[detail];
+  
+  /** Cambia la sección activa del workspace y limpia notificaciones. */
   function navigate(next: Section) { setSection(next); setMenuOpen(false); setNotice(''); }
+  
+  /** Exporta los datos sintéticos de los equipos filtrados a un archivo CSV. */
   function exportCsv() {
     const rows = [['Equipo', 'Llamadas ofrecidas', 'Atendidas', 'Nivel de servicio (%)', 'AHT (segundos)', 'Calidad (%)'], ...teams.map(team => [team.name, team.calls, team.answered, (team.service / team.calls * 100).toFixed(2), (team.handleSeconds / team.answered).toFixed(2), (team.qualityPoints / 100).toFixed(2)])];
     const blob = new Blob(['\uFEFF', rows.map(row => row.join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });

@@ -1,3 +1,9 @@
+/**
+ * @file setup-integration.ts
+ * @description Configuración previa para el entorno de pruebas de integración en ATLAS.
+ * Valida las variables de base de datos local (/atlas_test), colas de BullMQ, MinIO y activa el proveedor AI Mock determinista.
+ */
+
 import '../packages/database/src/environment.js';
 for (const key of ['ADMIN_DATABASE_URL', 'DATABASE_URL', 'AUTH_DATABASE_URL']) {
   const value = process.env[key];

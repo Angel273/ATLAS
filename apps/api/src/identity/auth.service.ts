@@ -1,3 +1,11 @@
+/**
+ * @file apps/api/src/identity/auth.service.ts
+ * @description Servicio de autenticación, sesiones y control de acceso (AuthService) en ATLAS.
+ * Gestiona el ciclo de vida de autenticación: verificación de credenciales con scrypt, limitación de tasa (rate-limiting)
+ * con HMAC en Redis/PostgreSQL, flujo TOTP/MFA obligatorio para administradores, emisión y rotación de tokens opacos
+ * de sesión, resolución de membresías con RLS (`withIdentity`) y verificación de capacidades RBAC (`requireCapability`).
+ */
+
 import { createHmac, randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import * as OTPAuth from 'otpauth';
@@ -13,17 +21,23 @@ const recordSchema = z.object({
   pending_mfa_secret: z.string().nullable(), mfa_secret: z.string().nullable(), mfa_enabled: z.boolean(),
 });
 export type Principal = { userId: string; tenantId: string; role: z.infer<typeof roleSchema>; capabilities: Capability[] };
+
+/**
+ * Servicio de gestión de autenticación, sesiones y MFA.
+ */
 export class AuthService {
   readonly pool: Pool;
   readonly key: Buffer;
   readonly rateKey: string;
   readonly dummy: Promise<string>;
+
   constructor() {
     this.pool = createPool(process.env.AUTH_DATABASE_URL);
     this.key = Buffer.from(z.string().regex(/^[a-f0-9]{64}$/).parse(process.env.AUTH_ENCRYPTION_KEY), 'hex');
     this.rateKey = z.string().min(64).parse(process.env.AUTH_RATE_KEY);
     this.dummy = hashPassword(randomBytes(32).toString('hex'));
   }
+
   async onModuleDestroy() { await this.pool.end(); }
   async rateLimit(identifier: string, limit = 10) {
     const key = createHmac('sha256', this.rateKey).update(identifier).digest('hex');

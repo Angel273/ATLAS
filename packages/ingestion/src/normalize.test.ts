@@ -1,6 +1,14 @@
+/**
+ * @file packages/ingestion/src/normalize.test.ts
+ * @description Pruebas unitarias para la normalización determinista de valores regionales en ingesta.
+ * Valida preservación de precisión decimal, verificación estricta de agrupamiento de miles,
+ * interpretación sin ambigüedad de fechas regionales y rechazo de tiempos ambiguos durante cambios de horario.
+ */
+
 import { describe,it,expect } from 'vitest';
 import { normalize } from './normalize.js';
 import type { Regional } from '@atlas/contracts';
+
 const regional: Regional = {decimalSeparator:',',thousandsSeparator:'.',dateFormat:'DD/MM/YYYY',timezone:'America/Guatemala',delimiter:';'};
 describe('regional values without guessing',()=>{
   it('preserves precision and validates grouping',()=>{

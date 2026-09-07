@@ -1,6 +1,14 @@
+/**
+ * @file packages/kpi/src/dsl.test.ts
+ * @description Pruebas unitarias para el parser y compilador de la DSL segura de fórmulas analíticas.
+ * Valida precedencia de operadores, parametrización segura de literales, funciones temporales (DATE_DIFF),
+ * rechazo de inyecciones SQL, agregaciones anidadas, tipos incompatibles y límites de complejidad sintáctica.
+ */
+
 import {describe,it,expect} from 'vitest';
 import {parseFormula,compileFormula} from './dsl.js';
 import type {SourceField} from '@atlas/contracts';
+
 const fields: SourceField[] = [
   {source:'Amount',target:'amount',type:'decimal',required:false},
   {source:'Team',target:'team',type:'string',required:false},

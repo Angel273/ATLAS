@@ -1,3 +1,10 @@
+/**
+ * @file types.ts
+ * @description Definiciones de tipos e interfaces para el Lienzo Semántico Visual (Semantic Canvas).
+ * Modela los datos de nodos de datasets, nodos de KPIs, aristas de relaciones, aristas de dependencias
+ * y estructuras de simulación de rutas de consulta.
+ */
+
 import type { Cardinality, JoinType, TargetDirection } from '@atlas/contracts';
 
 export type FieldType = 'string' | 'integer' | 'decimal' | 'boolean' | 'date' | 'datetime' | 'duration';

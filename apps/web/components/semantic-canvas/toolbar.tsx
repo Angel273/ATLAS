@@ -1,3 +1,10 @@
+/**
+ * @file toolbar.tsx
+ * @description Barra de herramientas superior flotante para el Lienzo Semántico (Semantic Canvas).
+ * Proporciona controles para alternar capas (ERD, KPIs o Todo), auto-layout, centrado de vista,
+ * simulador de rutas, exportación/importación JSON y creación de KPIs.
+ */
+
 'use client';
 import { useRef } from 'react';
 import {
@@ -31,6 +38,9 @@ interface CanvasToolbarProps {
   onToggleEdgesOnTop?: () => void;
 }
 
+/**
+ * Renderiza la barra de herramientas del canvas con selectores de capa, botones de acción y contadores.
+ */
 export function CanvasToolbar({
   layer,
   onLayerChange,
@@ -49,6 +59,9 @@ export function CanvasToolbar({
 }: CanvasToolbarProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  /**
+   * Maneja la selección de archivo para importar un esquema semántico desde JSON.
+   */
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;

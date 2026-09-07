@@ -1,6 +1,14 @@
+/**
+ * @file apps/api/src/bootstrap-admin.ts
+ * @description Script de aprovisionamiento del administrador inicial y organización primaria de ATLAS.
+ * Valida variables de entorno obligatorias (`ATLAS_ADMIN_EMAIL`, `ATLAS_ADMIN_PASSWORD`, `ATLAS_ORGANIZATION_NAME`),
+ * aplica hash scrypt a la contraseña e inserta la membresía inicial con rol 'admin' y registro de auditoría.
+ */
+
 import { createPool } from '@atlas/database';
 import { z } from 'zod';
 import { hashPassword } from './identity/crypto.js';
+
 const input = z.object({
   ATLAS_ADMIN_EMAIL: z.email().max(254).transform(value => value.toLowerCase()),
   ATLAS_ADMIN_PASSWORD: z.string().min(14).max(128),

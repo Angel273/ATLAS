@@ -1,3 +1,10 @@
+/**
+ * @file apps/web/components/app-header.tsx
+ * @description Barra de navegación superior persistente de la plataforma ATLAS (@atlas/web).
+ * Muestra el logotipo de la marca, enlaces a los módulos principales (Datasets, Capa Semántica/KPIs,
+ * Dashboards, Workforce, AI Chat y Organización), modal de perfil de usuario y control de cierre de sesión.
+ */
+
 'use client';
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
@@ -12,7 +19,11 @@ interface AppHeaderProps {
   onLogout?: () => void;
 }
 
+/**
+ * Componente de encabezado de aplicación con navegación por módulos y gestión de sesión.
+ */
 export function AppHeader({ session, onLogout }: AppHeaderProps) {
+
   const pathname = usePathname();
   const router = useRouter();
   const [profileOpen, setProfileOpen] = useState(false);

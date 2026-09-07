@@ -1,3 +1,10 @@
+/**
+ * @file page.tsx
+ * @description Módulo de Capa Semántica, Definición de KPIs y Lienzo Visual Interactivo.
+ * Ofrece vistas duales (Lienzo interactivo tipo Lucidchart y Tabla detallada), gestión de fórmulas DSL,
+ * versionado inmutable de indicadores (v{n+1}), mapeo dinámico de workforce y ejecución de consultas semánticas.
+ */
+
 'use client';
 import { useEffect, useState, useRef, type FormEvent } from 'react';
 import { z } from 'zod';
@@ -21,6 +28,9 @@ import { AppHeader } from '../../../components/app-header';
 import { SemanticCanvas } from '../../../components/semantic-canvas/semantic-canvas';
 import { Network, Table } from 'lucide-react';
 
+/**
+ * Componente principal de la página de Capa Semántica y KPIs.
+ */
 export default function KpisPage() {
   const [session, setSession] = useState<Session | null>(null);
   const [viewMode, setViewMode] = useState<'canvas' | 'table'>('canvas');
@@ -43,6 +53,13 @@ export default function KpisPage() {
   const [formCriticalThreshold, setFormCriticalThreshold] = useState('');
   const [formDimensions, setFormDimensions] = useState<string[]>([]);
   const [formDependencies, setFormDependencies] = useState('');
+
+  // Workforce Mapping state
+  const [wfEnabled, setWfEnabled] = useState(false);
+  const [wfMatchKey, setWfMatchKey] = useState<'code' | 'bms_id' | 'normalized_name' | string>('code');
+  const [wfDatasetField, setWfDatasetField] = useState('');
+  const [wfSelectedColumns, setWfSelectedColumns] = useState<string[]>(['supervisor', 'floor_manager', 'wave', 'tenure']);
+
   const formSectionRef = useRef<HTMLElement>(null);
 
   // Relationships state
@@ -71,15 +88,43 @@ export default function KpisPage() {
   const canPublish = session?.capabilities.includes('semantic.publish');
   const mainSource = sources.find(s => s.version.id === sourceId);
 
-  async function refresh(includeDep = showDeprecated) {
+  async function loadSources(userSession?: z.infer<typeof sessionSchema> | null) {
+    const caps = userSession?.capabilities ?? session?.capabilities ?? [];
+    if (caps.includes('semantic.manage') || caps.includes('semantic.read') || caps.includes('dataset.read')) {
+      try {
+        const datasets = await api('/datasets', datasetListSchema);
+        const items = await Promise.all(
+          datasets.items.map(async dataset => ({
+            id: dataset.id,
+            name: dataset.name,
+            slug: dataset.slug,
+            versions: (await api(`/datasets/${dataset.id}/versions`, versionListSchema)).items,
+          }))
+        );
+        setSources(
+          items.flatMap(item =>
+            item.versions
+              .filter(version => version.publishedAt)
+              .map(version => ({ id: item.id, name: item.name, slug: item.slug, version }))
+          )
+        );
+      } catch {
+        // Ignored if datasets fail to load
+      }
+    }
+  }
+
+  async function refresh(includeDep = showDeprecated, userSession?: z.infer<typeof sessionSchema> | null) {
     setKpis((await api(`/kpis?includeDeprecated=${includeDep}`, kpiListSchema)).items);
-    if (session?.capabilities.includes('semantic.read')) {
+    const caps = userSession?.capabilities ?? session?.capabilities ?? [];
+    if (caps.includes('semantic.read')) {
       try {
         setRelationships((await api('/semantic/relationships', semanticRelationshipListSchema)).items);
       } catch {
         // Semantic endpoint might be loading
       }
     }
+    await loadSources(userSession);
   }
 
   useEffect(() => {
@@ -122,6 +167,17 @@ export default function KpisPage() {
     setFormCriticalThreshold(kpi.targets?.criticalThreshold !== undefined ? String(kpi.targets.criticalThreshold) : '');
     setFormDimensions(kpi.dimensions || []);
     setFormDependencies((kpi.dependencies || []).join(', '));
+    if (kpi.workforceMapping) {
+      setWfEnabled(Boolean(kpi.workforceMapping.enabled));
+      setWfMatchKey(kpi.workforceMapping.matchKey || 'code');
+      setWfDatasetField(kpi.workforceMapping.datasetField || '');
+      setWfSelectedColumns(kpi.workforceMapping.selectedColumns || ['supervisor', 'floor_manager', 'wave', 'tenure']);
+    } else {
+      setWfEnabled(false);
+      setWfMatchKey('code');
+      setWfDatasetField('');
+      setWfSelectedColumns(['supervisor', 'floor_manager', 'wave', 'tenure']);
+    }
     setError('');
     setNotice('');
     formSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -141,6 +197,10 @@ export default function KpisPage() {
     setFormCriticalThreshold('');
     setFormDimensions([]);
     setFormDependencies('');
+    setWfEnabled(false);
+    setWfMatchKey('code');
+    setWfDatasetField('');
+    setWfSelectedColumns(['supervisor', 'floor_manager', 'wave', 'tenure']);
   }
 
   useEffect(() => {
@@ -148,34 +208,7 @@ export default function KpisPage() {
       try {
         const user = await api('/auth/session', sessionSchema);
         setSession(user);
-        setKpis((await api('/kpis', kpiListSchema)).items);
-
-        if (user.capabilities.includes('semantic.read')) {
-          try {
-            setRelationships((await api('/semantic/relationships', semanticRelationshipListSchema)).items);
-          } catch {
-            // Ignored on initial session load
-          }
-        }
-
-        if (user.capabilities.includes('semantic.manage')) {
-          const datasets = await api('/datasets', datasetListSchema);
-          const items = await Promise.all(
-            datasets.items.map(async dataset => ({
-              id: dataset.id,
-              name: dataset.name,
-              slug: dataset.slug,
-              versions: (await api(`/datasets/${dataset.id}/versions`, versionListSchema)).items,
-            }))
-          );
-          setSources(
-            items.flatMap(item =>
-              item.versions
-                .filter(version => version.publishedAt)
-                .map(version => ({ id: item.id, name: item.name, slug: item.slug, version }))
-            )
-          );
-        }
+        await refresh(showDeprecated, user);
       } catch (e) {
         setError(e instanceof Error ? e.message : 'No se pudo cargar.');
       }
@@ -246,6 +279,12 @@ export default function KpisPage() {
           targetDirection: formTargetDirection,
           targets,
           dependencies: formDependencies ? formDependencies.split(',').map(s => s.trim()).filter(Boolean) : [],
+          workforceMapping: {
+            enabled: wfEnabled,
+            matchKey: wfMatchKey,
+            datasetField: wfDatasetField,
+            selectedColumns: wfSelectedColumns,
+          },
         }),
       });
       setSelected(kpi);
@@ -755,6 +794,115 @@ export default function KpisPage() {
                   </fieldset>
                 )}
 
+                {/* Workforce Integration (Decoupled Dynamic Agent Mapping) */}
+                <div
+                  style={{
+                    marginTop: '16px',
+                    padding: '14px 16px',
+                    borderRadius: '6px',
+                    border: '1px solid var(--border)',
+                    background: wfEnabled ? 'rgba(59, 130, 246, 0.04)' : 'var(--surface-muted)',
+                    transition: 'all 0.2s ease',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: 600 }}>
+                      <input
+                        type="checkbox"
+                        checked={wfEnabled}
+                        onChange={e => setWfEnabled(e.target.checked)}
+                      />
+                      <span>Vincular con Workforce (Agentes, Jerarquía & Semanas)</span>
+                    </label>
+                    <span className="secondary" style={{ fontSize: '12px' }}>
+                      {wfEnabled ? 'Activo · Cruce semántico dinámico' : 'Opcional'}
+                    </span>
+                  </div>
+
+                  <p className="secondary" style={{ fontSize: '13px', margin: '0 0 12px 0' }}>
+                    Cruza métricas con la jerarquía de Workforce sin alterar el dataset original.
+                    Podrás agrupar y filtrar este KPI por Supervisor, Floor Manager, Wave, Tenure o Semana Operativa.
+                  </p>
+
+                  {wfEnabled && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--border)' }}>
+                      <div className="data-grid">
+                        <label className="field">
+                          Clave de identificación en Workforce
+                          <select
+                            value={wfMatchKey}
+                            onChange={e => setWfMatchKey(e.target.value)}
+                          >
+                            <option value="code">Código de Agente / Documento (code)</option>
+                            <option value="bms_id">Identificador BMS Telefónico (bms_id)</option>
+                            <option value="normalized_name">Nombre Normalizado (NORMALIZED_NAME)</option>
+                          </select>
+                        </label>
+
+                        <label className="field">
+                          Columna en el Dataset de Eficiencias
+                          {mainSource?.version.mapping?.fields && mainSource.version.mapping.fields.length > 0 ? (
+                            <select
+                              value={wfDatasetField}
+                              onChange={e => setWfDatasetField(e.target.value)}
+                              required={wfEnabled}
+                            >
+                              <option value="">Selecciona columna del agente</option>
+                              {mainSource.version.mapping.fields.map(f => (
+                                <option key={f.target} value={f.target}>
+                                  {f.target} ({f.type}) {f.source ? `← ${f.source}` : ''}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input
+                              type="text"
+                              placeholder="ej. agent_id, cod_agente, asesor"
+                              value={wfDatasetField}
+                              onChange={e => setWfDatasetField(e.target.value)}
+                              required={wfEnabled}
+                            />
+                          )}
+                          <span className="secondary" style={{ fontSize: '11px', marginTop: '2px' }}>
+                            Campo del dataset que contiene el valor correspondiente a la clave elegida.
+                          </span>
+                        </label>
+                      </div>
+
+                      <fieldset style={{ margin: 0, padding: '10px 14px', borderRadius: '4px', border: '1px solid var(--border)' }}>
+                        <legend style={{ fontSize: '12px', fontWeight: 600, padding: '0 6px' }}>
+                          Columnas de Workforce a inyectar en las dimensiones del KPI
+                        </legend>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '8px', marginTop: '6px' }}>
+                          {[
+                            { id: 'supervisor', label: 'Supervisor' },
+                            { id: 'floor_manager', label: 'Floor Manager (FM)' },
+                            { id: 'wave', label: 'Wave / Ola' },
+                            { id: 'tenure', label: 'Tenure (Días)' },
+                            { id: 'team', label: 'Equipo' },
+                            { id: 'week', label: 'Semana Operativa' },
+                          ].map(col => (
+                            <label key={col.id} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '13px', cursor: 'pointer' }}>
+                              <input
+                                type="checkbox"
+                                checked={wfSelectedColumns.includes(col.id)}
+                                onChange={e => {
+                                  if (e.target.checked) {
+                                    setWfSelectedColumns(prev => [...prev, col.id]);
+                                  } else {
+                                    setWfSelectedColumns(prev => prev.filter(c => c !== col.id));
+                                  }
+                                }}
+                              />
+                              <span>{col.label}</span> <code>({col.id})</code>
+                            </label>
+                          ))}
+                        </div>
+                      </fieldset>
+                    </div>
+                  )}
+                </div>
+
                 <div style={{ marginTop: '16px', display: 'flex', gap: '8px', alignItems: 'center' }}>
                   <button className="button primary" disabled={busy}>
                     {busy
@@ -812,6 +960,24 @@ export default function KpisPage() {
                     <tr key={kpi.id}>
                       <td>
                         <strong>{kpi.name}</strong> <code>({kpi.slug})</code>
+                        {kpi.workforceMapping?.enabled && (
+                          <span
+                            style={{
+                              display: 'inline-block',
+                              marginLeft: '8px',
+                              padding: '2px 6px',
+                              borderRadius: '4px',
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                              color: '#2563eb',
+                              border: '1px solid rgba(59, 130, 246, 0.3)',
+                            }}
+                            title={`Cruce con Workforce activo (${kpi.workforceMapping.matchKey} ➔ ${kpi.workforceMapping.datasetField})`}
+                          >
+                            👥 Workforce
+                          </span>
+                        )}
                       </td>
                       <td>v{kpi.number}</td>
                       <td>
@@ -932,8 +1098,13 @@ export default function KpisPage() {
                 Agrupar por
                 <select value={dimension} onChange={e => setDimension(e.target.value)}>
                   <option value="">Total general</option>
-                  {selected.dimensions.map(name => (
-                    <option key={name} value={name}>{name}</option>
+                  {Array.from(new Set([
+                    ...selected.dimensions,
+                    ...(selected.workforceMapping?.enabled ? (selected.workforceMapping.selectedColumns || []) : [])
+                  ])).map(name => (
+                    <option key={name} value={name}>
+                      {name} {selected.workforceMapping?.enabled && (selected.workforceMapping.selectedColumns || []).includes(name) ? '(Workforce)' : ''}
+                    </option>
                   ))}
                 </select>
               </label>
@@ -942,8 +1113,13 @@ export default function KpisPage() {
                 Filtro (igual a)
                 <select value={filterField} onChange={e => setFilterField(e.target.value)}>
                   <option value="">Sin filtro</option>
-                  {selected.dimensions.map(name => (
-                    <option key={name} value={name}>{name}</option>
+                  {Array.from(new Set([
+                    ...selected.dimensions,
+                    ...(selected.workforceMapping?.enabled ? (selected.workforceMapping.selectedColumns || []) : [])
+                  ])).map(name => (
+                    <option key={name} value={name}>
+                      {name} {selected.workforceMapping?.enabled && (selected.workforceMapping.selectedColumns || []).includes(name) ? '(Workforce)' : ''}
+                    </option>
                   ))}
                 </select>
               </label>
@@ -1137,6 +1313,15 @@ export default function KpisPage() {
                     <dd>{result.datasetVersionId}</dd>
                     <dt>Versión semántica</dt>
                     <dd>{result.modelVersionId}</dd>
+                    {selected.workforceMapping?.enabled && (
+                      <>
+                        <dt>Cruce semántico con Workforce</dt>
+                        <dd>
+                          Activo: <code>{selected.workforceMapping.matchKey}</code> ➔ <code>{selected.workforceMapping.datasetField}</code>.
+                          Columnas mapeadas: <strong>{(selected.workforceMapping.selectedColumns || []).join(', ')}</strong>
+                        </dd>
+                      </>
+                    )}
                     <dt>Hash del archivo original</dt>
                     <dd><code>{result.sourceHash}</code></dd>
                     <dt>Huella de consulta (Query Hash)</dt>

@@ -1,3 +1,13 @@
+/**
+ * @file apps/web/components/members-panel.tsx
+ * @description Panel administrativo de gestión de usuarios, roles y membresías de la organización (@atlas/web).
+ * Proporciona interfaces Radix UI accesibles para:
+ * - Listado de miembros con estados de MFA y bloqueo.
+ * - Creación de nuevos usuarios con generador de contraseña segura y copia rápida.
+ * - Edición de detalles de usuario (nombre, correo, rol, reseteo de MFA, cambio de contraseña forzado).
+ * - Deshabilitación de cuentas y eliminación de miembros preservando la existencia de al menos un administrador.
+ */
+
 'use client';
 import { useEffect, useState, type FormEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -9,6 +19,9 @@ import {
 import { Plus, X, ShieldAlert, Trash2, Check, Copy, UserPlus, ShieldCheck, Pencil, KeyRound, RotateCcw } from 'lucide-react';
 import { api } from '../lib/api';
 
+/**
+ * Genera una contraseña aleatoria de alta entropía con formato `Atlas-<aleatorio>!`.
+ */
 function generateSecurePassword(): string {
   const chars = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%&*';
   let rand = '';
@@ -18,7 +31,11 @@ function generateSecurePassword(): string {
   return `Atlas-${rand}!`;
 }
 
+/**
+ * Componente principal del panel de administración de miembros y permisos del tenant.
+ */
 export function MembersPanel({ currentUserId }: { currentUserId: string }) {
+
   const [members, setMembers] = useState<Member[]>([]);
   const [roles, setRoles] = useState<Record<string, Role>>({});
   const [loading, setLoading] = useState(true);

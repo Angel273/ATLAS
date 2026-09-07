@@ -1,3 +1,11 @@
+/**
+ * @file page.tsx
+ * @description Módulo integral de gestión de Datasets, ingesta de archivos CSV/XLSX y ciclo de vida dual.
+ * Proporciona subida directa firmada a S3/MinIO, perfilado streaming, mapeo de columnas y tipos,
+ * validación regional, reporte de errores en celdas, publicación inmutable, borrado definitivo (drafts)
+ * y archivado lógico con protección por triggers.
+ */
+
 'use client';
 import { useEffect, useState, useMemo, type FormEvent } from 'react';
 import { z } from 'zod';
@@ -74,6 +82,9 @@ const errorTranslations: Record<string, string> = {
   FORMULA_WITHOUT_CACHED_VALUE: 'Fórmula de Excel sin valor calculado previo guardado en el archivo.',
 };
 
+/**
+ * Traduce un código de error técnico de validación o ingesta a un mensaje legible para el usuario.
+ */
 function humanizeError(code: string | null): string {
   if (!code) return '';
   return errorTranslations[code] ?? `Código de error: ${code}`;
@@ -89,6 +100,9 @@ interface ColumnConfig {
   sample: string | null;
 }
 
+/**
+ * Componente principal de la interfaz de Datasets y gestión de ciclo de vida de versiones.
+ */
 export default function DatasetsPage() {
   const [session, setSession] = useState<Session | null>(null);
   const [datasets, setDatasets] = useState<z.infer<typeof datasetSchema>[]>([]);

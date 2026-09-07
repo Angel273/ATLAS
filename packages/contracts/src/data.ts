@@ -1,3 +1,12 @@
+/**
+ * @file packages/contracts/src/data.ts
+ * @description Esquemas y tipos Zod para el ciclo de vida de ingesta y datasets en ATLAS.
+ * Cubre límites de carga (MAX_UPLOAD_BYTES), tipos de campos soportados, configuraciones regionales
+ * (separadores decimales, formato de fecha, zona horaria), políticas de manejo de errores,
+ * esquemas de mapeo de origen a destino, versionado inmutable de datasets, perfilado streaming,
+ * reportes de incidencias/validación y la clase base de error de dominio (DomainError).
+ */
+
 import { z } from 'zod';
 export const MAX_UPLOAD_BYTES = 250 * 1024 * 1024;
 export const fieldTypeSchema = z.enum(['string', 'integer', 'decimal', 'boolean', 'date', 'datetime', 'duration']);
@@ -41,6 +50,15 @@ export const dataPreviewSchema = z.object({ fields: z.array(sourceFieldSchema), 
 export const actionResultSchema = z.object({ ok: z.literal(true) }).strict();
 export const actorSchema = z.object({ userId: z.uuid(), tenantId: z.uuid(), capabilities: z.array(z.string()) });
 export type DataActor = z.infer<typeof actorSchema>;
+
+/**
+ * Error de dominio operacional con código semántico y status HTTP asociado.
+ */
 export class DomainError extends Error {
+  /**
+   * @param code Código de error tipado de dominio.
+   * @param status Código de estado HTTP correspondiente (ej. 400, 403, 404, 409).
+   * @param message Mensaje legible para el usuario o log auditado.
+   */
   constructor(public readonly code: string, public readonly status: number, message: string) { super(message); }
 }

@@ -1,8 +1,18 @@
+/**
+ * @file auto-layout.ts
+ * @description Algoritmo de distribución y posicionamiento determinista (Auto-Layout) para el Lienzo Semántico.
+ * Organiza los nodos de datasets en columnas estructuradas a la izquierda y los nodos de KPIs jerárquicamente
+ * a la derecha según sus niveles de dependencias recursivas.
+ */
+
 import type { Node, Edge } from '@xyflow/react';
 
 /**
- * Calculates deterministic layout coordinates for Dataset ERD nodes and KPI nodes
- * placing Datasets in columns on the left and KPIs in levels on the right.
+ * Calcula coordenadas deterministas para nodos de datasets y KPIs,
+ * ubicando tablas en columnas a la izquierda y métricas jerarquizadas a la derecha.
+ * @param nodes Lista de nodos a distribuir.
+ * @param edges Lista de aristas para deducir relaciones.
+ * @returns Copia de nodos con posiciones x, y actualizadas.
  */
 export function layoutElements(
   nodes: Node[],

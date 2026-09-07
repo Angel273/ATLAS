@@ -1,3 +1,11 @@
+/**
+ * @file page.tsx
+ * @description Módulo de Dashboards Gobernados y Visualización Operacional de ATLAS.
+ * Proporciona una cuadrícula responsive de 12 columnas para widgets interactivos ECharts,
+ * alternativas tabulares accesibles WCAG 2.2 AA, filtros operacionales de call center
+ * (Supervisor, Floor Manager, Wave) y publicación inmutable versionada de tableros.
+ */
+
 'use client';
 import { useEffect, useState, useMemo, useRef, type FormEvent } from 'react';
 import {
@@ -40,6 +48,9 @@ import { WidgetConfigSidebar } from '../../../components/widget-config-sidebar';
 
 type QueryData = z.infer<typeof queryResultSchema>;
 
+/**
+ * Componente principal de página para visualización, edición y publicación de Dashboards.
+ */
 export default function DashboardsPage() {
   const [session, setSession] = useState<Session | null>(null);
   const [dashboards, setDashboards] = useState<Dashboard[]>([]);

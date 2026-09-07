@@ -1,3 +1,10 @@
+/**
+ * @file query-path-simulator.tsx
+ * @description Modal y simulador de rutas de consulta (Query Path Simulator).
+ * Permite seleccionar un dataset raíz y datasets de destino para evaluar y resaltar visualmente
+ * la ruta BFS de JOINs deterministas en el lienzo semántico sin productos cartesianos.
+ */
+
 'use client';
 import { useState, useMemo } from 'react';
 import { Play, Sparkles, X, RotateCcw, AlertTriangle, ArrowRight } from 'lucide-react';
@@ -12,6 +19,9 @@ interface QueryPathSimulatorProps {
   onHighlightPath: (path: SimulatedPath | null) => void;
 }
 
+/**
+ * Componente interactivo para simular y verificar la alcanzabilidad de datasets mediante el grafo de relaciones.
+ */
 export function QueryPathSimulator({
   isOpen,
   onClose,

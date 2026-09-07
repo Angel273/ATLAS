@@ -1,3 +1,10 @@
+/**
+ * @file formula-builder-panel.tsx
+ * @description Panel lateral para la construcción, validación y edición visual de fórmulas de KPIs.
+ * Permite seleccionar datasets, insertar funciones SQL/DSL parametrizadas, configurar metas operacionales
+ * (target, advertencia, crítico) y especificar dependencias entre métricas.
+ */
+
 'use client';
 import { useState, useEffect, type FormEvent } from 'react';
 import { Activity, Check, AlertTriangle, AlertCircle, X, Sparkles, Plus, Code2 } from 'lucide-react';
@@ -27,6 +34,9 @@ interface FormulaBuilderPanelProps {
   canManage: boolean;
 }
 
+/**
+ * Componente de panel lateral que gestiona el formulario de edición y validación sintáctica de fórmulas de KPIs.
+ */
 export function FormulaBuilderPanel({
   isOpen,
   onClose,

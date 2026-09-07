@@ -1,6 +1,13 @@
+/**
+ * @file apps/api/src/identity/crypto.test.ts
+ * @description Pruebas unitarias para utilidades criptográficas de contraseñas, secretos MFA y tokens de sesión.
+ * Verifica salazón única por contraseña, verificación constante, cifrado AES-256-GCM y hashing SHA-256 de tokens.
+ */
+
 import { describe, expect, it } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { encryptSecret, decryptSecret, hashPassword, verifyPassword, newToken, tokenHash } from './crypto.js';
+
 describe('Credentials and secrets', () => {
   it('salts password hashes and verifies without storing plaintext', async () => {
     const password = 'synthetic-test-password-only';

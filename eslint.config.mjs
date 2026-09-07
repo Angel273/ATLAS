@@ -1,3 +1,9 @@
+/**
+ * @file eslint.config.mjs
+ * @description Configuración central de ESLint (flat config) para el monorepo ATLAS.
+ * Aplica reglas estrictas de TypeScript, prohíbe el uso de `any` no justificado y define variables globales de Node.js y navegador.
+ */
+
 import js from '@eslint/js';
 import ts from 'typescript-eslint';
 import globals from 'globals';

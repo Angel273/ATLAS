@@ -1,3 +1,9 @@
+/**
+ * @file dependency-edge.tsx
+ * @description Arista visual personalizada que representa una dependencia de cálculo entre KPIs en el Lienzo Semántico.
+ * Dibuja una línea de Bézier punteada con halo de contraste para legibilidad sobre el fondo.
+ */
+
 'use client';
 import { memo } from 'react';
 import {
@@ -7,6 +13,9 @@ import {
 } from '@xyflow/react';
 import type { DependencyEdgeData } from '../types';
 
+/**
+ * Componente de arista ReactFlow para enlazar visualmente dependencias entre métricas/KPIs.
+ */
 export const DependencyEdge = memo(function DependencyEdge({
   id,
   sourceX,

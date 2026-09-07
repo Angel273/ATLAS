@@ -1,9 +1,19 @@
+/**
+ * @file kpi-node.tsx
+ * @description Nodo visual para indicadores (KPIs) en el Lienzo Semántico.
+ * Muestra el nombre, slug, fórmula DSL, unidad de medida, metas operacionales
+ * (objetivo, advertencia, crítico) y handles de entrada/salida para dependencias y datasets.
+ */
+
 'use client';
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { Activity, Percent, Clock, Hash, ArrowUpRight, ArrowDownRight, Target, Edit3 } from 'lucide-react';
 import type { KpiNodeData } from '../types';
 
+/**
+ * Renderiza la etiqueta visual de unidad de medida para el KPI (% porcentaje, seg segundos, o numérico).
+ */
 function UnitBadge({ unit }: { unit: 'number' | 'percent' | 'seconds' }) {
   switch (unit) {
     case 'percent':
@@ -28,6 +38,9 @@ function UnitBadge({ unit }: { unit: 'number' | 'percent' | 'seconds' }) {
   }
 }
 
+/**
+ * Componente de nodo ReactFlow que representa una métrica o KPI gobernado en el canvas.
+ */
 export const KpiNode = memo(function KpiNode({ data, selected }: NodeProps) {
   const nodeData = data as unknown as KpiNodeData;
   const isHighlighted = Boolean(nodeData.isHighlighted);

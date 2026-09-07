@@ -1,3 +1,10 @@
+/**
+ * @file apps/web/components/widget-chart.tsx
+ * @description Renderizador modular de gráficos ECharts para Widgets de Dashboards (@atlas/web).
+ * Soporta visualizaciones de línea (`line_chart`), barras (`bar_chart`) y áreas (`area_chart`),
+ * líneas de objetivo (`markLine`), formateo de unidades (porcentajes, números, segundos) y paleta de color adaptativa.
+ */
+
 'use client';
 import { useEffect, useRef, useState } from 'react';
 
@@ -14,7 +21,11 @@ interface WidgetChartProps {
   height?: number | string | undefined;
 }
 
+/**
+ * Componente gráfico parametrizable para widgets de dashboards gobernados.
+ */
 export function WidgetChart({
+
   type,
   title,
   categories,

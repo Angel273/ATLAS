@@ -1,6 +1,14 @@
+/**
+ * @file apps/api/src/data.integration.test.ts
+ * @description Pruebas de integración de ingesta masiva real, snapshots inmutables y consultas a KPIs gobernados.
+ * Valida carga firmada a S3/MinIO, procesamiento streaming en worker BullMQ, mapeo, normalización regional,
+ * ciclo dual de datasets (hard delete para borradores vs archivo lógico) y aislamiento entre tenants.
+ */
+
 import {afterAll,beforeAll,describe,it,expect} from 'vitest';
 import {randomUUID} from 'node:crypto';
 import {createPool,withTenant} from '@atlas/database';
+
 import {IngestionService,startImportWorker} from '@atlas/ingestion';
 import {KpiService} from '@atlas/kpi';
 import {roleCapabilities,type DataActor,type DatasetVersion,type Mapping,type Regional} from '@atlas/contracts';

@@ -1,3 +1,9 @@
+/**
+ * @file semantic-edge.tsx
+ * @description Arista visual con enrutamiento suave (SmoothStep) para representar relaciones semánticas entre datasets.
+ * Muestra etiquetas interactivas con cardinalidad (1:1, 1:N, N:1), tipo de join (INNER/LEFT) y estado de ruta preferida.
+ */
+
 'use client';
 import { memo } from 'react';
 import {
@@ -9,6 +15,9 @@ import {
 import { Star } from 'lucide-react';
 import type { SemanticEdgeData } from '../types';
 
+/**
+ * Componente de arista ReactFlow que renderiza una relación semántica con etiqueta de cardinalidad y halo.
+ */
 export const SemanticEdge = memo(function SemanticEdge({
   id,
   sourceX,
@@ -35,6 +44,7 @@ export const SemanticEdge = memo(function SemanticEdge({
     borderRadius: 16,
   });
 
+  /** Formatea la clave de cardinalidad a notación estándar relacional (1:1, 1:N, N:1). */
   function formatCardinality(card?: string) {
     if (card === 'one_to_one') return '1:1';
     if (card === 'one_to_many') return '1:N';

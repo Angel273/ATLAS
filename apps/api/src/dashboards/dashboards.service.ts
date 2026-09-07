@@ -1,3 +1,12 @@
+/**
+ * @file apps/api/src/dashboards/dashboards.service.ts
+ * @description Servicio de Dashboards gobernados y visualizaciones analíticas (@atlas/api).
+ * Administra el catálogo de tableros operacionales de call center, versionado inmutable de layouts
+ * (cuadrícula responsiva de 12 columnas), widgets interactivos (gráficos ECharts, KPIs, tablas accesibles),
+ * publicación de versiones oficiales por administradores y resolución de opciones dinámicas de filtros
+ * operacionales (supervisores, jefes de piso y olas de capacitación).
+ */
+
 import { z } from 'zod';
 import { createPool, withTenant, type PoolClient, type Pool } from '@atlas/database';
 import {
@@ -16,12 +25,16 @@ import { permit, audit } from '@atlas/ingestion';
 const dashSelect = `SELECT id, name, slug, description, current_version_id AS "currentVersionId", created_at::text AS "createdAt" FROM dashboards`;
 const verSelect = `SELECT id, dashboard_id AS "dashboardId", number, title, description, layout, global_filters AS "globalFilters", published_at::text AS "publishedAt", created_at::text AS "createdAt" FROM dashboard_versions`;
 
+/**
+ * Servicio de gestión de dashboards gobernados, versiones inmutables y opciones de filtro operacional.
+ */
 export class DashboardsService {
   readonly pool: Pool = createPool(process.env.DATABASE_URL);
 
   async onModuleDestroy() {
     await this.pool.end();
   }
+
 
   async list(actor: DataActor) {
     permit(actor, 'dashboard.read');

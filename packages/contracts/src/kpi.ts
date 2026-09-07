@@ -1,6 +1,16 @@
+/**
+ * @file packages/contracts/src/kpi.ts
+ * @description Esquemas y tipos Zod para el modelo semántico, KPIs gobernados y consultas analíticas.
+ * Define la estructura de relaciones entre datasets (cardinalidad, tipos de JOIN), objetivos de métricas
+ * (dirección de mejora, umbrales de alerta y crítico), mapeo dinámico de Workforce (vinculación de agentes,
+ * supervisores y olas operacionales sin redundancia física), versionado inmutable de fórmulas (v1, v2...)
+ * y la Query API declarativa para ejecución segura de consultas multidimensionales con agregaciones.
+ */
+
 import { z } from 'zod';
 
 export const cardinalitySchema = z.enum(['one_to_one', 'many_to_one', 'one_to_many']);
+
 export type Cardinality = z.infer<typeof cardinalitySchema>;
 
 export const joinTypeSchema = z.enum(['inner', 'left']);
@@ -38,6 +48,15 @@ export const kpiTargetsSchema = z.object({
 }).strict();
 export type KpiTargets = z.infer<typeof kpiTargetsSchema>;
 
+export const workforceMappingSchema = z.object({
+  enabled: z.boolean().default(false),
+  matchKey: z.string().min(1).max(63).default('code'),
+  datasetField: z.string().max(63).default(''),
+  selectedColumns: z.array(z.string().min(1).max(63)).default(['supervisor', 'floor_manager', 'wave', 'tenure']),
+  extraJoins: z.record(z.string(), z.string()).optional(),
+}).strict();
+export type WorkforceMapping = z.infer<typeof workforceMappingSchema>;
+
 export const kpiCreateSchema = z.object({
   name: z.string().trim().min(2).max(120),
   slug: z.string().regex(/^[a-z][a-z0-9_]{1,62}$/),
@@ -51,6 +70,7 @@ export const kpiCreateSchema = z.object({
   targetDirection: targetDirectionSchema.default('higher_is_better'),
   targets: kpiTargetsSchema.default({}),
   dependencies: z.array(z.string().regex(/^[a-z][a-z0-9_]{1,62}$/)).max(10).default([]),
+  workforceMapping: workforceMappingSchema.default({ enabled: false, matchKey: 'code', datasetField: '', selectedColumns: [] }),
 }).strict();
 
 export const kpiSchema = kpiCreateSchema.extend({

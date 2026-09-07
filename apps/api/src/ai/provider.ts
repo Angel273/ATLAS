@@ -1,3 +1,12 @@
+/**
+ * @file apps/api/src/ai/provider.ts
+ * @description Capa de abstracción multi-proveedor para Inteligencia Artificial en ATLAS (@atlas/api).
+ * Define la interfaz agnóstica `AIProvider` y sus adaptadores:
+ * - `MockAIProvider`: Proveedor determinista offline para pruebas automatizadas y entornos sin conexión externa.
+ * - `GeminiAIProvider`: Adaptador nativo para modelos de Google Gemini con soporte para llamadas a funciones (Function Calling / Tool Use).
+ * - Función fábrica `getAIProvider`: Instancia el proveedor configurado (`GEMINI_API_KEY` o fallback seguro al mock).
+ */
+
 import type { ToolDefinition } from './tools.js';
 
 export interface AIMessage {
@@ -23,10 +32,14 @@ export interface AIResponse {
   tokensUsed: number;
 }
 
+/**
+ * Interfaz desacoplada para proveedores de inteligencia artificial.
+ */
 export interface AIProvider {
   readonly name: string;
   generate(messages: AIMessage[], tools: ToolDefinition[]): Promise<AIResponse>;
 }
+
 
 export class MockAIProvider implements AIProvider {
   readonly name = 'mock-deterministic';

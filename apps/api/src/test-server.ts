@@ -1,6 +1,14 @@
+/**
+ * @file apps/api/src/test-server.ts
+ * @description Servidor aislado para pruebas E2E (End-to-End con Playwright).
+ * Opera exclusivamente sobre la base de datos local de test (`atlas_test`), semillas sintéticas
+ * y buckets efímeros para evitar tocar datos de desarrollo o producción.
+ */
+
 // Isolated E2E server. Never loads or resets the application database.
 import { createPool } from '@atlas/database';
 import { hashPassword } from './identity/crypto.js';
+
 for (const key of ['ADMIN_DATABASE_URL', 'DATABASE_URL', 'AUTH_DATABASE_URL']) {
   const url = new URL(process.env[key] ?? '');
   if (!['127.0.0.1', 'localhost'].includes(url.hostname)) throw new Error('E2E_REQUIRES_LOCAL_DATABASE');

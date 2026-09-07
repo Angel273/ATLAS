@@ -1,3 +1,10 @@
+/**
+ * @file apps/web/lib/sample-data.ts
+ * @description Conjuntos de datos de muestra y utilidades de formato de métricas para la vista previa del dashboard.
+ * Proporciona equipos simulados, tendencias de días anteriores, formateadores numéricos (porcentajes, duraciones mm:ss)
+ * y agregaciones operacionales para la interfaz de usuario.
+ */
+
 export const sampleTeams = [
   { id: 'norte', name: 'Equipo Norte', account: 'support', initials: 'EN', agents: 24, calls: 3248, answered: 3021, service: 2840, handleSeconds: 1057350, qualityPoints: 9510, evaluations: 50 },
   { id: 'centro', name: 'Equipo Centro', account: 'support', initials: 'EC', agents: 22, calls: 3016, answered: 2827, service: 2620, handleSeconds: 1059641, qualityPoints: 9340, evaluations: 48 },
@@ -6,9 +13,21 @@ export const sampleTeams = [
 ] as const;
 export type SampleTeam = typeof sampleTeams[number];
 export const numberFormat = new Intl.NumberFormat('es-GT');
+
+/** Formatea un valor numérico como porcentaje con 1 decimal. */
 export const percent = (value: number) => `${value.toLocaleString('es-GT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
+
+/** Formatea una cantidad de segundos a formato `minutos:segundos`. */
 export const duration = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.round(seconds) % 60).padStart(2, '0')}`;
+
+/**
+ * Calcula agregaciones ponderadas (nivel de servicio, AHT y calidad) para una lista de equipos.
+ *
+ * @param teams Colección de equipos de muestra.
+ * @returns Métricas agregadas ponderadas.
+ */
 export function aggregate(teams: readonly SampleTeam[]) {
+
   const calls = teams.reduce((sum, team) => sum + team.calls, 0);
   const answered = teams.reduce((sum, team) => sum + team.answered, 0);
   const evaluations = teams.reduce((sum, team) => sum + team.evaluations, 0);

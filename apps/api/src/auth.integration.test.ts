@@ -1,6 +1,14 @@
+/**
+ * @file apps/api/src/auth.integration.test.ts
+ * @description Pruebas de integración HTTP para el módulo de Identidad, Autenticación y Usuarios con PostgreSQL real.
+ * Valida flujos completos de login, enrolamiento y verificación obligatoria de MFA TOTP, emisión de cookies seguras,
+ * aislamiento de sesiones por tenant, administración de cuentas y actualización de perfiles.
+ */
+
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import * as OTPAuth from 'otpauth';
+
 import { randomUUID } from 'node:crypto';
 import { createPool } from '@atlas/database';
 import {

@@ -1,6 +1,14 @@
+/**
+ * @file apps/api/src/conversations.integration.test.ts
+ * @description Pruebas de integración para AI Chat Multi-Proveedor, herramientas gobernadas y aislamiento estricto de tenants.
+ * Valida límites duros de turnos (máx 5 turnos), inyección forzosa de tenantId de la sesión,
+ * citas verificadas (`grounding_context`) e imposibilidad de filtración cruzada de datos entre Tenant A y Tenant B.
+ */
+
 import { afterAll, beforeAll, describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { createPool, withTenant } from '@atlas/database';
+
 import { IngestionService } from '@atlas/ingestion';
 import { KpiService } from '@atlas/kpi';
 import { WorkforceService } from './workforce/workforce.service.js';

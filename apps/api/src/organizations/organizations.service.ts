@@ -1,12 +1,24 @@
+/**
+ * @file apps/api/src/organizations/organizations.service.ts
+ * @description Servicio de administración de organizaciones y cuentas operacionales (campañas/clientes de call center).
+ * Proporciona endpoints para consultar el nombre de la organización del tenant, listar cuentas,
+ * crear nuevas cuentas con zona horaria específica (idempotencia y validación de unicidad),
+ * actualizar cuentas existentes y realizar borrado seguro con auditoría completa.
+ */
+
 import { z } from 'zod';
 import { createPool, withTenant } from '@atlas/database';
 import { accountListSchema, accountSchema, createAccountSchema, updateAccountSchema, deleteAccountResultSchema } from '@atlas/contracts';
 import { requireCapability, type Principal } from '../identity/auth.service.js';
 import { AppError } from '../common/errors.js';
 
+/**
+ * Servicio de gestión de tenants, organizaciones y cuentas operacionales.
+ */
 export class OrganizationsService {
   readonly pool = createPool(process.env.DATABASE_URL);
   async onModuleDestroy() { await this.pool.end(); }
+
   async name(principal: Principal) {
     return withTenant(this.pool, principal.tenantId, async client => {
       const result = await client.query('SELECT name FROM organizations WHERE id = $1', [principal.tenantId]);

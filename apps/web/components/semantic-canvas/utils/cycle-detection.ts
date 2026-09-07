@@ -1,6 +1,16 @@
 /**
- * Detects if adding a directed dependency edge from `fromSlug` to `toSlug`
- * would introduce a circular dependency cycle in the KPI dependency graph.
+ * @file cycle-detection.ts
+ * @description Utilidad de detección de ciclos en el grafo de dependencias de KPIs.
+ * Previene referencias circulares en fórmulas y métricas derivadas ejecutando una búsqueda en profundidad (DFS).
+ */
+
+/**
+ * Detecta si agregar una dependencia dirigida de `fromSlug` hacia `toSlug`
+ * introduciría un ciclo circular en el grafo de dependencias de KPIs.
+ * @param fromSlug Slug de la métrica origen.
+ * @param toSlug Slug de la métrica destino.
+ * @param existingDependencies Diccionario con las dependencias existentes por slug.
+ * @returns Objeto indicando si existe ciclo y la ruta del ciclo detectado.
  */
 export function wouldIntroduceCycle(
   fromSlug: string,

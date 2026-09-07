@@ -1,6 +1,14 @@
+/**
+ * @file apps/api/src/dashboards.integration.test.ts
+ * @description Pruebas de integración para Dashboards, Layouts, Widgets, Versionado inmutable y RLS.
+ * Verifica la creación de tableros, publicación inmutable restringida a administradores,
+ * aislamiento de lectura entre tenants y filtrado operacional por supervisor, jefe de piso y ola.
+ */
+
 import { afterAll, beforeAll, describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { createPool, withTenant } from '@atlas/database';
+
 import { IngestionService } from '@atlas/ingestion';
 import { KpiService } from '@atlas/kpi';
 import { DashboardsService } from './dashboards/dashboards.service.js';

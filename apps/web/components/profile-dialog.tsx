@@ -1,3 +1,12 @@
+/**
+ * @file apps/web/components/profile-dialog.tsx
+ * @description Cuadro de diálogo modal Radix UI para la gestión del perfil del usuario activo (@atlas/web).
+ * Organizado en pestañas:
+ * - Información personal: actualización de nombre y correo electrónico.
+ * - Seguridad: cambio de contraseña y estado del segundo factor de autenticación (MFA/TOTP).
+ * - Permisos y capacidades: visualización clara del rol institucional y matriz de capacidades RBAC activas.
+ */
+
 'use client';
 import { useState, useEffect, type FormEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -15,7 +24,11 @@ interface ProfileDialogProps {
   onProfileUpdated?: (updated: { name: string; email: string }) => void;
 }
 
+/**
+ * Modal accesible de configuración del perfil y credenciales del usuario autenticado.
+ */
 export function ProfileDialog({ open, onOpenChange, session, onProfileUpdated }: ProfileDialogProps) {
+
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(false);
   const [tab, setTab] = useState<'info' | 'security' | 'permissions'>('info');

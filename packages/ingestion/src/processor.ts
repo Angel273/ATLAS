@@ -1,3 +1,12 @@
+/**
+ * @file packages/ingestion/src/processor.ts
+ * @description Procesador central de tareas de ingesta masiva (worker) para ATLAS.
+ * Ejecuta en aislamiento streaming las dos fases principales del ciclo de vida:
+ * 1. `profile`: Descarga segura desde S3, verificación de hash SHA-256, inspección de hojas, detección de encabezados y muestreo.
+ * 2. `import`: Validación por lotes, normalización regional estricta, aplicación de políticas de error ('strict', 'nullify', 'skip'),
+ * inserción en `dataset_rows`, deduplicación por hash de clave (`upsert`), preservación de linaje y actualización de progreso.
+ */
+
 import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -15,6 +24,14 @@ import { verifyTask, type ImportTask } from './queue.js';
 
 const internalSchema = z.object({ object_key: z.string(), object_version: z.string(), bytes: z.coerce.number(), format: z.enum(['csv','xlsx']), regional: regionalSchema, sha256: z.string().nullable(), mapping: mappingSchema.nullable(), base_version_id: z.uuid().nullable(), state: z.string(), published_at: z.date().nullable() });
 const terminal = ['ready', 'cancelled'];
+
+/**
+ * Desinfecta y desambigua los encabezados detectados en la primera fila de datos.
+ * Maneja celdas nulas asignando nombres secuenciales y añade sufijos numéricos a columnas duplicadas.
+ *
+ * @param cells Celdas que conforman la fila de cabecera.
+ * @returns Lista de nombres únicos limpios.
+ */
 export function sanitizeHeaders(cells: Cell[]): string[] {
   const seen = new Map<string, number>();
   return cells.map((cell, index) => {
@@ -27,7 +44,13 @@ export function sanitizeHeaders(cells: Cell[]): string[] {
   });
 }
 
+/**
+ * Ejecuta el procesamiento de una tarea de ingesta (`profile` o `import`) en el worker de fondo.
+ *
+ * @param input Payload de la tarea con firma HMAC.
+ */
 export async function processImport(input: unknown) {
+
   const task = verifyTask(input), pool = createPool(process.env.DATABASE_URL), auth = createPool(process.env.AUTH_DATABASE_URL), storage = new ObjectStorage();
   let directory: string | undefined;
   const authorize = async () => {
@@ -184,8 +207,15 @@ export async function processImport(input: unknown) {
     storage.close(); await Promise.all([pool.end(), auth.end()]);
   }
 }
+/**
+ * Registra el fallo de una tarea de importación en la base de datos de forma segura.
+ *
+ * @param task Tarea que falló.
+ * @param code Código de error tipado a persistir.
+ */
 export async function failImport(task: ImportTask, code: string) {
   const pool = createPool(process.env.DATABASE_URL);
   try { await withTenant(pool, task.tenantId, client => client.query("UPDATE dataset_versions SET state='failed',error_code=$2 WHERE id=$1 AND state NOT IN ('cancelled','ready') AND published_at IS NULL", [task.versionId, code])); }
   finally { await pool.end(); }
 }
+

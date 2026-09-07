@@ -1,3 +1,11 @@
+/**
+ * @file apps/api/src/common/errors.ts
+ * @description Filtro global de excepciones seguras (SafeExceptionFilter) para el API de ATLAS.
+ * Intercepta DomainErrors, ZodErrors y HttpExceptions, normalizándolos en respuestas JSON auditables
+ * con `correlationId` según `errorResponseSchema`. Protege la privacidad evitando registrar en logs
+ * mensajes de excepción, payloads, encabezados o credenciales sensibles.
+ */
+
 import { Catch, HttpException, type ArgumentsHost, type ExceptionFilter } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { ZodError } from 'zod';
@@ -5,9 +13,20 @@ import { randomUUID } from 'node:crypto';
 import { errorResponseSchema, DomainError } from '@atlas/contracts';
 
 export class AppError extends DomainError {}
+
+/**
+ * Filtro de excepciones seguro que oculta detalles internos del servidor y retorna códigos de error tipados.
+ */
 @Catch()
 export class SafeExceptionFilter implements ExceptionFilter {
+  /**
+   * Captura cualquier excepción de la aplicación y genera una respuesta HTTP estructurada.
+   *
+   * @param error Error o excepción capturada.
+   * @param host Argumentos de ejecución HTTP.
+   */
   catch(error: unknown, host: ArgumentsHost) {
+
     const request = host.switchToHttp().getRequest<Request>();
     const response = host.switchToHttp().getResponse<Response>();
     const correlationId = typeof response.locals.correlationId === 'string' ? response.locals.correlationId : randomUUID();

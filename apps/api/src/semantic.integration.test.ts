@@ -1,6 +1,14 @@
+/**
+ * @file apps/api/src/semantic.integration.test.ts
+ * @description Pruebas de integración para la Capa Semántica, JOINs multi-tabla, grafo de relaciones y KPIs gobernados.
+ * Valida la creación de relaciones semánticas, detección de ciclos y dependencias, resolución BFS de joins,
+ * compilación y agregación SQL multidimensional, y enriquecimiento dinámico con workforce.
+ */
+
 import { afterAll, beforeAll, describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { createPool, withTenant } from '@atlas/database';
+
 import { IngestionService, startImportWorker } from '@atlas/ingestion';
 import { KpiService } from '@atlas/kpi';
 import {
@@ -270,5 +278,101 @@ describe('Phase 2: Semantic Layer, Multi-table Joins, Relationships and Governed
         client.query('UPDATE semantic_relationships SET from_field = $1', ['tampered'])
       )
     ).rejects.toMatchObject({ code: '23514' });
+  });
+
+  it('executes KPI query with dynamic workforce mapping and operational columns', async () => {
+    // Insert workforce employees and supervisor for tenant
+    const supId = randomUUID();
+    const a1Id = randomUUID();
+    const a2Id = randomUUID();
+
+    await withTenant(data.pool, tenant, async client => {
+      await client.query(
+        `INSERT INTO employees(tenant_id, id, code, first_name, last_name, wave)
+         VALUES ($1, $2, 'sup1', 'Carlos', 'Lider', 'Leadership'),
+                ($1, $3, 'a1', 'Ana', 'Gomez', 'Wave 1'),
+                ($1, $4, 'a2', 'Beto', 'Perez', 'Wave 2')`,
+        [tenant, supId, a1Id, a2Id]
+      );
+      await client.query(
+        `INSERT INTO employee_relationships(tenant_id, employee_id, manager_id, relation_type, valid_from)
+         VALUES ($1, $2, $4, 'supervisor', now()),
+                ($1, $3, $4, 'supervisor', now())`,
+        [tenant, a1Id, a2Id, supId]
+      );
+    });
+
+    // Create KPI with workforce_mapping enabled
+    const wfKpi = await kpis.create(
+      actor,
+      {
+        name: 'Total Duration by Supervisor',
+        slug: 'duration_by_sup',
+        description: 'Duration mapped dynamically to Workforce hierarchy',
+        datasetVersionId: callsVersion.id,
+        relatedDatasetVersionIds: [],
+        formula: 'SUM(duration)',
+        unit: 'seconds' as const,
+        precision: 2,
+        dimensions: ['supervisor', 'wave'],
+        targetDirection: 'lower_is_better' as const,
+        targets: {},
+        dependencies: [],
+        workforceMapping: {
+          enabled: true,
+          matchKey: 'code',
+          datasetField: 'agent_id',
+          selectedColumns: ['supervisor', 'wave'],
+        },
+      },
+      randomUUID(),
+      randomUUID()
+    );
+
+    await kpis.publish(actor, wfKpi.id, randomUUID());
+
+    // Query grouped by supervisor
+    const querySup = await kpis.query(
+      actor,
+      {
+        kpiVersionId: wfKpi.id,
+        dimensions: ['supervisor'],
+        filters: [],
+      },
+      randomUUID()
+    );
+
+    expect(querySup.rows).toEqual([
+      { dimensions: { supervisor: 'Carlos Lider' }, value: '420.50' },
+    ]);
+    expect(querySup.joinPath.some(p => p.includes('Workforce'))).toBe(true);
+
+    // Query grouped by wave
+    const queryWave = await kpis.query(
+      actor,
+      {
+        kpiVersionId: wfKpi.id,
+        dimensions: ['wave'],
+        filters: [],
+      },
+      randomUUID()
+    );
+
+    expect(queryWave.rows).toEqual([
+      { dimensions: { wave: 'Wave 1' }, value: '180.50' },
+      { dimensions: { wave: 'Wave 2' }, value: '240.00' },
+    ]);
+
+    // Query with filter by wave
+    const queryFilter = await kpis.query(
+      actor,
+      {
+        kpiVersionId: wfKpi.id,
+        dimensions: [],
+        filters: [{ field: 'wave', op: 'eq' as const, value: 'Wave 1' }],
+      },
+      randomUUID()
+    );
+    expect(queryFilter.rows[0]?.value).toBe('180.50');
   });
 });

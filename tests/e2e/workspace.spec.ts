@@ -1,3 +1,9 @@
+/**
+ * @file workspace.spec.ts
+ * @description Pruebas de extremo a extremo (E2E) con Playwright y auditorías de accesibilidad con AxeCore.
+ * Cubre flujos de navegación sintética, teclado, diálogo de procedencia KPI, login con TOTP/MFA y auditoría WCAG 2.2 AA.
+ */
+
 import { expect, test } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { createHmac } from 'node:crypto';

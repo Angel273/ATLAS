@@ -1,6 +1,15 @@
+/**
+ * @file packages/contracts/src/dashboard.ts
+ * @description Contratos y esquemas Zod para la configuración de Dashboards gobernados y Widgets interactivos.
+ * Define la cuadrícula de 12 columnas (widgetGridSchema), tipología de visualizaciones soportadas
+ * (KPI cards, gráficos de líneas, barras, áreas, tablas accesibles y texto informativo), configuraciones avanzadas
+ * (líneas de objetivo, formato condicional, columnas calculadas) y versionado inmutable de dashboards.
+ */
+
 import { z } from 'zod';
 
 export const widgetTypeSchema = z.enum([
+
   'kpi_card',
   'line_chart',
   'bar_chart',

@@ -1,3 +1,10 @@
+/**
+ * @file page.tsx
+ * @description Panel principal de administración de la organización en ATLAS.
+ * Permite gestionar cuentas y campañas (crear, editar zona horaria, eliminar con borrado seguro),
+ * administrar membresías de usuarios y cerrar sesiones individuales o globales.
+ */
+
 'use client';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
@@ -13,6 +20,9 @@ import { MembersPanel } from '../../components/members-panel';
 
 type AccountItem = { id: string; name: string; timezone: string };
 
+/**
+ * Componente de página para la administración global de la organización y sus cuentas operativas.
+ */
 export default function OrganizationPage() {
   const router = useRouter();
   const [session, setSession] = useState<Session | null>(null);
@@ -52,6 +62,7 @@ export default function OrganizationPage() {
     void load(); return () => { cancelled = true; };
   }, []);
 
+  /** Cierra la sesión activa o revoca todas las sesiones del usuario. */
   async function logout(all = false) {
     try {
       const response = await fetch(`/api/v1/auth/${all ? 'revoke-all' : 'logout'}`, { method: 'POST', credentials: 'same-origin' });
@@ -60,6 +71,7 @@ export default function OrganizationPage() {
     } catch (error) { setError(error instanceof Error ? error.message : 'No se pudo cerrar la sesión.'); }
   }
 
+  /** Crea una nueva cuenta o campaña operativa en la organización con clave de idempotencia. */
   async function createAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSaving(true);
@@ -80,6 +92,7 @@ export default function OrganizationPage() {
     }
   }
 
+  /** Abre el diálogo modal de edición para la cuenta seleccionada. */
   function handleOpenEdit(account: AccountItem) {
     setEditingAccount(account);
     setEditName(account.name);
@@ -87,6 +100,7 @@ export default function OrganizationPage() {
     setEditError('');
   }
 
+  /** Guarda los cambios de nombre y zona horaria de la cuenta editada. */
   async function handleUpdateAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!editingAccount) return;
@@ -108,6 +122,7 @@ export default function OrganizationPage() {
     }
   }
 
+  /** Ejecuta la eliminación de una cuenta tras la confirmación de seguridad. */
   async function handleDeleteAccount() {
     if (!deletingAccount) return;
     setDeleteSaving(true);

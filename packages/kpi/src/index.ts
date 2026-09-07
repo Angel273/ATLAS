@@ -1,3 +1,12 @@
+/**
+ * @file packages/kpi/src/index.ts
+ * @description Servicio principal de KPIs y Capa Semántica para ATLAS (@atlas/kpi).
+ * Gestiona el ciclo de vida de relaciones semánticas entre datasets, la definición y versionado
+ * inmutable de métricas operacionales (v1, v2...), validación de dependencias circulares,
+ * compilación y ejecución de consultas analíticas declarativas con soporte para agregaciones,
+ * caché en memoria por huella digital (fingerprint) y enriquecimiento dinámico con dimensiones laborales (Workforce).
+ */
+
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { createPool, withTenant, type PoolClient } from '@atlas/database';
@@ -21,15 +30,21 @@ import { resolveJoinPaths, detectKpiCycles, evaluateTarget, type RelationshipRec
 export { parseFormula, compileFormula, extractReferencedTables } from './dsl.js';
 export { resolveJoinPaths, detectKpiCycles, evaluateTarget } from './relations.js';
 
-const select = `SELECT id, name, slug, description, number, model_version_id AS "modelVersionId", dataset_version_id AS "datasetVersionId", formula, unit, precision, dimensions, target_direction AS "targetDirection", targets, dependencies, deprecated_at::text AS "deprecatedAt", published_at::text AS "publishedAt", created_at::text AS "createdAt" FROM kpi_versions`;
+const select = `SELECT id, name, slug, description, number, model_version_id AS "modelVersionId", dataset_version_id AS "datasetVersionId", formula, unit, precision, dimensions, target_direction AS "targetDirection", targets, dependencies, COALESCE(workforce_mapping, '{"enabled": false, "matchKey": "code", "datasetField": "", "selectedColumns": []}'::jsonb) AS "workforceMapping", deprecated_at::text AS "deprecatedAt", published_at::text AS "publishedAt", created_at::text AS "createdAt" FROM kpi_versions`;
 const relSelect = `SELECT id, from_dataset_id AS "fromDatasetId", from_field AS "fromField", to_dataset_id AS "toDatasetId", to_field AS "toField", cardinality, join_type AS "joinType", is_preferred AS "isPreferred", published_at::text AS "publishedAt", created_at::text AS "createdAt" FROM semantic_relationships`;
 
+/**
+ * Servicio central para el catálogo de métricas, relaciones semánticas y ejecución de consultas.
+ */
 export class KpiService {
   readonly pool = createPool(process.env.DATABASE_URL);
   private readonly queryCache = new Map<string, { result: z.infer<typeof queryResultSchema>; expiresAt: number }>();
 
   constructor(private readonly ingestion: IngestionService) {}
 
+  /**
+   * Cierra el pool de conexiones y libera recursos al destruir el módulo.
+   */
   async onModuleDestroy() {
     this.queryCache.clear();
     await this.pool.end();
@@ -37,7 +52,14 @@ export class KpiService {
 
   // --- Semantic Relationships ---
 
+  /**
+   * Obtiene la lista de relaciones semánticas publicadas en el tenant autenticado.
+   *
+   * @param actor Contexto del usuario autenticado con capacidades.
+   * @returns Lista de relaciones semánticas validadas.
+   */
   async listRelationships(actor: DataActor) {
+
     permit(actor, 'semantic.read');
     return withTenant(this.pool, actor.tenantId, async client => {
       const rows = (await client.query(`${relSelect} ORDER BY created_at DESC LIMIT 100`)).rows;
@@ -45,6 +67,15 @@ export class KpiService {
     });
   }
 
+  /**
+   * Crea una relación semántica entre dos datasets publicados con cardinalidad y tipo de JOIN definidos.
+   * Valida existencia de datasets, versiones vigentes y existencia de columnas clave.
+   *
+   * @param actor Contexto del usuario con capacidad `semantic.manage`.
+   * @param body Payload con la definición de la relación semántica.
+   * @param key Clave de idempotencia única.
+   * @param correlation ID de correlación para auditoría.
+   */
   async createRelationship(actor: DataActor, body: unknown, key: string, correlation: string) {
     permit(actor, 'semantic.manage');
     const input = semanticRelationshipCreateSchema.parse(body);
@@ -114,7 +145,15 @@ export class KpiService {
 
   // --- KPIs ---
 
+  /**
+   * Lista los KPIs gobernados disponibles para el tenant actual.
+   * Filtra borradores salvo para usuarios con permisos administrativos `semantic.manage`.
+   *
+   * @param actor Contexto del usuario solicitante.
+   * @param includeDeprecated Si es true, incluye métricas que han sido deprecadas.
+   */
   async list(actor: DataActor, includeDeprecated = false) {
+
     permit(actor, 'semantic.read');
     return withTenant(this.pool, actor.tenantId, async client => {
       const conditions: string[] = [];
@@ -132,13 +171,29 @@ export class KpiService {
     });
   }
 
+  /**
+   * Obtiene la definición de un KPI por su ID dentro de la transacción actual.
+   *
+   * @param client Cliente PostgreSQL activo.
+   * @param id Identificador UUID del KPI.
+   */
   private async get(client: PoolClient, id: string) {
     const row = (await client.query(`${select} WHERE id = $1`, [z.uuid().parse(id)])).rows[0];
     if (!row) throw new DomainError('KPI_NOT_FOUND', 404, 'KPI no encontrado.');
     return kpiSchema.parse(row);
   }
 
+  /**
+   * Crea una nueva versión inmutable de KPI (borrador) validando la sintaxis de la fórmula,
+   * compatibilidad de dimensiones, ciclo de dependencias y mapeo de workforce.
+   *
+   * @param actor Contexto del usuario autenticado con rol de gestión.
+   * @param body Payload de creación de KPI.
+   * @param key Clave única de idempotencia.
+   * @param correlation Correlation ID para auditoría.
+   */
   async create(actor: DataActor, body: unknown, key: string, correlation: string) {
+
     permit(actor, 'semantic.manage');
     const input = kpiCreateSchema.parse(body);
     z.uuid().parse(key);
@@ -196,6 +251,23 @@ export class KpiService {
           allTargetFields.add(`${t.slug}.${f.target}`);
         }
       }
+      if (input.workforceMapping?.enabled) {
+        const wfCols = input.workforceMapping.selectedColumns || ['supervisor', 'floor_manager', 'wave', 'tenure'];
+        for (const c of wfCols) {
+          allTargetFields.add(c);
+          allTargetFields.add(`workforce.${c}`);
+        }
+        allTargetFields.add('supervisor');
+        allTargetFields.add('floor_manager');
+        allTargetFields.add('fm');
+        allTargetFields.add('wave');
+        allTargetFields.add('tenure');
+        allTargetFields.add('team');
+        allTargetFields.add('week');
+        allTargetFields.add('bms_id');
+        allTargetFields.add('agent_name');
+        allTargetFields.add('agent_code');
+      }
       if (new Set(input.dimensions).size !== input.dimensions.length) {
         throw new DomainError('INVALID_DIMENSION', 400, 'Las dimensiones deben ser únicas.');
       }
@@ -221,15 +293,16 @@ export class KpiService {
         `INSERT INTO kpi_versions(
           tenant_id, slug, number, name, description, model_version_id, dataset_version_id,
           formula, ast, unit, precision, dimensions, target_direction, targets, dependencies,
-          actor_id, creation_key
+          workforce_mapping, actor_id, creation_key
         ) VALUES (
           $1, $2::varchar, (SELECT COALESCE(MAX(number), 0) + 1 FROM kpi_versions WHERE slug = $2::varchar),
-          $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+          $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
         ) RETURNING id`,
         [
           actor.tenantId, input.slug, input.name, input.description, model.id, input.datasetVersionId,
           input.formula, ast, input.unit, input.precision, JSON.stringify(input.dimensions),
           input.targetDirection, JSON.stringify(input.targets), JSON.stringify(input.dependencies),
+          JSON.stringify(input.workforceMapping ?? { enabled: false, matchKey: 'code', datasetField: '', selectedColumns: [] }),
           actor.userId, key
         ]
       );
@@ -240,6 +313,14 @@ export class KpiService {
     });
   }
 
+  /**
+   * Publica un KPI validando que la fórmula ejecute satisfactoriamente sobre los datos reales.
+   * Una vez publicado, el KPI se vuelve inmutable y disponible para dashboards y analistas.
+   *
+   * @param actor Contexto del usuario con capacidad `semantic.publish`.
+   * @param id Identificador UUID del KPI.
+   * @param correlation ID de correlación para auditoría.
+   */
   async publish(actor: DataActor, id: string, correlation: string) {
     permit(actor, 'semantic.publish');
     return withTenant(this.pool, actor.tenantId, async client => {
@@ -255,6 +336,13 @@ export class KpiService {
     });
   }
 
+  /**
+   * Marca un KPI publicado como deprecado para ocultarlo de nuevos tableros preservando histórico.
+   *
+   * @param actor Contexto del usuario con capacidad `semantic.publish`.
+   * @param id Identificador UUID del KPI.
+   * @param correlation ID de correlación para auditoría.
+   */
   async deprecate(actor: DataActor, id: string, correlation: string) {
     permit(actor, 'semantic.publish');
     return withTenant(this.pool, actor.tenantId, async client => {
@@ -272,6 +360,15 @@ export class KpiService {
     });
   }
 
+  /**
+   * Implementa el ciclo de vida dual para KPIs:
+   * - Borradores no publicados sin dependientes: borrado definitivo (Hard Delete).
+   * - Métricas publicadas: deprecación lógica preservando linaje y auditoría.
+   *
+   * @param actor Contexto del usuario con capacidad `semantic.manage`.
+   * @param id Identificador UUID del KPI.
+   * @param correlation ID de correlación para auditoría.
+   */
   async deleteOrDeprecate(actor: DataActor, id: string, correlation: string) {
     permit(actor, 'semantic.manage');
     return withTenant(this.pool, actor.tenantId, async client => {
@@ -303,7 +400,15 @@ export class KpiService {
     });
   }
 
+  /**
+   * Ejecuta una consulta analítica multidimensional contra un KPI con caché por fingerprint.
+   *
+   * @param actor Contexto del usuario solicitante con capacidad `semantic.read`.
+   * @param body Payload con KPI, dimensiones, filtros, rango temporal y límite.
+   * @param correlation ID de correlación para auditoría.
+   */
   async query(actor: DataActor, body: unknown, correlation: string) {
+
     permit(actor, 'semantic.read');
     const input = querySchema.parse(body);
 
@@ -333,7 +438,18 @@ export class KpiService {
     }
   }
 
+  /**
+   * Ejecuta el pipeline SQL completo de resolución y agregación:
+   * 1. Resuelve joins BFS deterministas entre tablas según el grafo semántico.
+   * 2. Inyecta mapeo dinámico de workforce (`workforce_mapping`) si está habilitado.
+   * 3. Compila la fórmula del KPI y aplica filtros, dimensiones y rangos temporales.
+   * 4. Evalúa las metas operacionales (`evaluateTarget`) asignando estado (good/warning/critical).
+   *
+   * @param client Cliente PostgreSQL de la transacción con contexto de tenant activo.
+   * @param input Parámetros validados de la consulta según `querySchema`.
+   */
   private async execute(client: PoolClient, input: z.infer<typeof querySchema>): Promise<z.infer<typeof queryResultSchema>> {
+
     const kpi = await this.get(client, input.kpiVersionId);
     const rootSource = await this.ingestion.source(client, kpi.datasetVersionId);
     const rootMapping = rootSource.version.mapping!;
@@ -479,7 +595,84 @@ export class KpiService {
       throw new DomainError('INVALID_DIMENSION', 400, 'Las dimensiones deben ser únicas.');
     }
 
+    const wfCols: Record<string, string> = (kpi.workforceMapping?.enabled && kpi.workforceMapping?.datasetField)
+      ? {
+          supervisor: "COALESCE(wf_sup.name, 'Sin supervisor')",
+          'workforce.supervisor': "COALESCE(wf_sup.name, 'Sin supervisor')",
+          floor_manager: "COALESCE(wf_fm.name, 'Sin FM')",
+          fm: "COALESCE(wf_fm.name, 'Sin FM')",
+          'workforce.floor_manager': "COALESCE(wf_fm.name, 'Sin FM')",
+          'workforce.fm': "COALESCE(wf_fm.name, 'Sin FM')",
+          wave: "COALESCE(wf_emp.wave, 'Sin ola')",
+          'workforce.wave': "COALESCE(wf_emp.wave, 'Sin ola')",
+          tenure: "COALESCE(wf_emp.hire_date::text, 'Sin fecha')",
+          'workforce.tenure': "COALESCE(wf_emp.hire_date::text, 'Sin fecha')",
+          agent_name: "CONCAT(wf_emp.first_name, ' ', wf_emp.last_name)",
+          'workforce.agent_name': "CONCAT(wf_emp.first_name, ' ', wf_emp.last_name)",
+          agent_code: "wf_emp.code",
+          'workforce.agent_code': "wf_emp.code",
+          bms_id: "COALESCE(wf_emp.bms_id, 'Sin BMS ID')",
+          'workforce.bms_id': "COALESCE(wf_emp.bms_id, 'Sin BMS ID')",
+          team: "COALESCE(wf_team.name, 'Sin equipo')",
+          'workforce.team': "COALESCE(wf_team.name, 'Sin equipo')",
+          week: "COALESCE(wf_week.week_code, 'Sin semana')",
+          'workforce.week': "COALESCE(wf_week.week_code, 'Sin semana')",
+        }
+      : {};
+
+    let wfJoinSql = '';
+    if (Object.keys(wfCols).length > 0) {
+      const matchKey = kpi.workforceMapping!.matchKey || 'code';
+      const dsFieldParam = bind(kpi.workforceMapping!.datasetField);
+      let matchClause = '';
+      if (matchKey === 'bms_id') {
+        matchClause = `LOWER(TRIM(wf_emp.bms_id)) = LOWER(TRIM(source.values ->> ${dsFieldParam}::text))`;
+      } else if (matchKey === 'normalized_name') {
+        matchClause = `wf_emp.normalized_name = UPPER(TRIM(regexp_replace(source.values ->> ${dsFieldParam}::text, '\\s+', ' ', 'g')))`;
+      } else {
+        matchClause = `LOWER(TRIM(wf_emp.code)) = LOWER(TRIM(source.values ->> ${dsFieldParam}::text))`;
+      }
+
+      wfJoinSql = `
+        LEFT JOIN employees AS wf_emp ON ${matchClause}
+        LEFT JOIN LATERAL (
+          SELECT m.id, CONCAT(m.first_name, ' ', m.last_name) AS name, m.code
+          FROM employee_relationships r
+          JOIN employees m ON m.id = r.manager_id
+          WHERE r.employee_id = wf_emp.id AND r.relation_type = 'supervisor' AND (r.valid_to IS NULL OR r.valid_to > now())
+          ORDER BY r.valid_from DESC LIMIT 1
+        ) wf_sup ON true
+        LEFT JOIN LATERAL (
+          SELECT m.id, CONCAT(m.first_name, ' ', m.last_name) AS name, m.code
+          FROM employee_relationships r
+          JOIN employees m ON m.id = r.manager_id
+          WHERE r.employee_id = wf_emp.id AND r.relation_type = 'floor_manager' AND (r.valid_to IS NULL OR r.valid_to > now())
+          ORDER BY r.valid_from DESC LIMIT 1
+        ) wf_fm ON true
+        LEFT JOIN LATERAL (
+          SELECT t.id, t.name, t.slug, a.metadata, a.week_id
+          FROM employment_assignments a
+          LEFT JOIN teams t ON t.id = a.team_id
+          WHERE a.employee_id = wf_emp.id AND (a.valid_to IS NULL OR a.valid_to > now())
+          ORDER BY a.valid_from DESC LIMIT 1
+        ) wf_team ON true
+        LEFT JOIN workforce_weeks AS wf_week ON wf_week.id = wf_team.week_id
+      `;
+    }
+
     const dimensions = input.dimensions.map(name => {
+      const lower = name.toLowerCase();
+      if (wfCols[name] || wfCols[lower]) {
+        const isPermitted = kpi.dimensions.includes(name) ||
+          kpi.dimensions.includes(lower) ||
+          (kpi.workforceMapping?.selectedColumns || []).includes(name) ||
+          (kpi.workforceMapping?.selectedColumns || []).includes(lower) ||
+          ['supervisor', 'floor_manager', 'fm', 'wave', 'tenure', 'team', 'bms_id', 'agent_name', 'agent_code', 'week'].includes(lower.replace('workforce.', ''));
+        if (!isPermitted) {
+          throw new DomainError('INVALID_DIMENSION', 400, `La dimensión '${name}' no está permitida para este KPI.`);
+        }
+        return `(${wfCols[name] || wfCols[lower]})::text`;
+      }
       const resolved = resolveField(name, false);
       if (!resolved) throw new DomainError('INVALID_DIMENSION', 400, `La dimensión '${name}' no está disponible.`);
       return `(${resolved.alias}.values ->> ${bind(resolved.field.target)}::text)`;
@@ -493,9 +686,15 @@ export class KpiService {
 
     const filters: string[] = [];
     for (const filter of input.filters) {
+      const norm = filter.field.toLowerCase();
+      if (wfCols[norm] || wfCols[filter.field]) {
+        const sqlCol = wfCols[norm] || wfCols[filter.field]!;
+        filters.push(`(${sqlCol})::text ${ops[filter.op]} ${bind(String(filter.value))}::text`);
+        continue;
+      }
+
       let resolved = resolveField(filter.field, true);
       if (!resolved) {
-        const norm = filter.field.toLowerCase();
         for (const tc of tableContexts) {
           const match = tc.fields.find(f => {
             const t = f.target.toLowerCase();
@@ -581,10 +780,15 @@ export class KpiService {
     await client.query("SET LOCAL work_mem = '16MB'");
     await client.query("SET LOCAL timezone = 'UTC'");
 
-    const sql = `SELECT ${dimensions.map((s, i) => `${s} AS d${i}`).join(',')}${dimensions.length ? ',' : ''} ROUND((${compiled.sql})::numeric, ${bind(kpi.precision)}::int)::text AS value FROM ${rootSource.relation} AS source${joinSql} ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''} ${dimensions.length ? `GROUP BY ${dimensions.map((_, i) => i + 1).join(',')} ORDER BY ${dimensions.map((_, i) => `${i + 1} NULLS LAST`).join(',')}` : ''} LIMIT ${bind(input.limit + 1)}::int`;
+    const sql = `SELECT ${dimensions.map((s, i) => `${s} AS d${i}`).join(',')}${dimensions.length ? ',' : ''} ROUND((${compiled.sql})::numeric, ${bind(kpi.precision)}::int)::text AS value FROM ${rootSource.relation} AS source${joinSql}${wfJoinSql} ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''} ${dimensions.length ? `GROUP BY ${dimensions.map((_, i) => i + 1).join(',')} ORDER BY ${dimensions.map((_, i) => `${i + 1} NULLS LAST`).join(',')}` : ''} LIMIT ${bind(input.limit + 1)}::int`;
 
     const rows = (await client.query<Record<string, string | null>>(sql, parameters)).rows;
     const targetEval = evaluateTarget(rows[0]?.value ?? null, kpi.targetDirection, kpi.targets);
+
+    const joinPath = joins.map(j => j.pathDescription);
+    if (wfJoinSql) {
+      joinPath.push(`Workforce (${kpi.workforceMapping?.matchKey || 'code'} ➔ ${kpi.workforceMapping?.datasetField})`);
+    }
 
     return queryResultSchema.parse({
       kpiVersionId: kpi.id,
@@ -598,7 +802,7 @@ export class KpiService {
       truncated: rows.length > input.limit,
       warnings: compiled.hasDivision ? ['La división entre cero devuelve nulo.'] : [],
       queryHash: createHash('sha256').update(JSON.stringify({ tenant: rootSource.dataset.id, ...input, model: kpi.modelVersionId })).digest('hex'),
-      joinPath: joins.map(j => j.pathDescription),
+      joinPath,
       cacheHit: false,
       targetEvaluation: targetEval,
     });
