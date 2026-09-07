@@ -11,40 +11,49 @@ Implementación del monorepo modular descrito en `design.md` e `implementation.m
   - Segundo factor MFA (TOTP) obligatorio para administradores antes de conceder acceso a datos.
   - Sesiones rotadas de 8 horas representadas mediante tokens criptográficos de 256 bits (hash SHA-256).
   - Gestión integral de usuarios, perfiles (nombre, contraseña), y membresías con PostgreSQL Row-Level Security (`atlas_auth` / `atlas_app`).
-  - Gestión de cuentas y campañas con protección del último administrador y borrado controlado.
+  - Control de acceso por cuenta (`identity.membership_account_access`) y asignación granular de permisos a miembros.
+- **Account Portal y Aislamiento por Cuenta (ATLAS v3):**
+  - **Portal central de cuentas (`/portal/accounts`):** selección post-login de cuentas operacionales con métricas en vivo (datasets, KPIs, dashboards, semana activa y estado del roster).
+  - **Aislamiento en profundidad (Composite RLS):** consultas acotadas mediante contexto doble `(atlas.tenant_id, atlas.account_id)`, aislando datasets, KPIs, dashboards y personal entre cuentas de una misma organización.
+  - **Ciclo de vida dual de cuentas:** Hard Delete definitivo para cuentas vacías sin histórico y archivo lógico (`archived_at`) protegido por triggers de PostgreSQL (`23514`) para cuentas con datos asociados.
+  - **Rotación de tokens por cuenta:** cambio dinámico de contexto mediante `/api/v1/auth/switch-account` sin desconexión del usuario.
 - **Ingesta Versionada y Ciclo de Vida Dual:**
-  - Carga directa firmada a MinIO/S3 para archivos CSV UTF-8 y XLSX.
+  - Carga directa firmada a MinIO/S3 para archivos CSV UTF-8 y XLSX vinculados a `account_id`.
   - Procesamiento streaming en worker aislado mediante `ExcelJS` con límite de memoria.
   - Perfilado automático, configuración regional explícita (separadores y formatos de fecha) y detección de errores antes de publicar.
   - Estrategias de actualización idempotentes: replace (nuevo snapshot), append (adición con linaje) y upsert (fusión por clave natural).
   - **Ciclo de vida dual:**
-    - *Borradores sin publicar:* eliminación definitiva (Hard Delete) con purga en base de datos y MinIO/S3.
+    - *Borradores sin publicar:* eliminación definitiva (Hard Delete) con purga física de todas las versiones y delete markers en MinIO/S3 (`storage.purge`).
     - *Versiones publicadas:* inmutabilidad estricta bloqueada por triggers de PostgreSQL (`23514`); solo admiten archivo lógico (`archived_at`) o deprecación (`deprecated_at`), garantizando reproducibilidad histórica.
-- **Capa Semántica y Lienzo Visual Interactivo (`/app/kpis`):**
-  - Grafo semántico con relaciones tipadas (`1:1`, `1:N`, `N:1`) y tipos de join (`INNER`, `LEFT`).
+- **Capa Semántica y Lienzo Visual Interactivo (`/app/accounts/:accountId/kpis`):**
+  - Grafo semántico acotado por cuenta con relaciones tipadas (`1:1`, `1:N`, `N:1`) y tipos de join (`INNER`, `LEFT`).
   - Resolución determinista de JOINs basada en algoritmo BFS que rechaza productos cartesianos y rutas ambiguas.
   - **Lienzo visual tipo Lucidchart (`@xyflow/react`):** vista dual (lienzo interactivo o lista clásica), tarjetas de datasets y KPIs, aristas con enrutamiento inteligente y halo de contraste en primer plano, simulador interactivo de rutas de consulta, constructor visual de fórmulas con autocompletado, detección de ciclos en tiempo real y exportación de diagramas a PNG/SVG.
 - **KPI Structure, DSL Segura y Mapeo Dinámico:**
   - DSL tipada que se compila a SQL interno parametrizado con validación estricta de tipos y semántica de nulos.
   - Metas operacionales (objetivo, advertencia, crítico) y dirección de optimización (`higher_is_better`, `lower_is_better`, `target_match`).
   - Versionado inmutable de fórmulas: modificar una métrica genera automáticamente la versión `v{n+1}` preservando las versiones anteriores.
-  - **Mapeo Dinámico de Workforce (`workforce_mapping`):** vincula automáticamente datasets operacionales con la estructura de personal (Supervisor, Floor Manager, Wave, Equipo) por código de agente, BMS ID o nombre normalizado sin duplicar almacenamiento.
-- **Dashboards Gobernados de 12 Columnas (`/app/dashboards`):**
+  - **Mapeo Dinámico de Workforce (`workforce_mapping`):** vincula automáticamente datasets operacionales con la estructura de personal (Supervisor, Floor Manager, Wave, Equipo) por código de agente o BMS ID sin duplicar almacenamiento.
+  - **Caché LRU acotada (500 entradas):** invalidación automática por publicación y control estricto de capacidad de lectura de workforce (`workforce.read`).
+- **Dashboards Gobernados de 12 Columnas (`/app/accounts/:accountId/dashboards`):**
   - Cuadrícula responsive de 12 columnas con reordenamiento visual Drag & Drop (`GripVertical`) y tiradores de redimensionamiento.
   - Catálogo de widgets: `kpi_card`, `line_chart`, `bar_chart`, `area_chart`, `table` y `text` renderizados con Apache ECharts y la paleta editorial de ATLAS.
   - **Accesibilidad WCAG 2.2 AA:** alternativa tabular accesible obligatoria en cada widget gráfico con un clic.
   - **Filtros operacionales inteligentes:** auto-detección y fallback de campos de fecha, y menús desplegables dinámicos para filtros de call center (Supervisor, Floor Manager, Wave).
   - Gobernanza de roles: administradores publican versiones oficiales inmutables; usuarios no administradores operan en estado efímero local de sesión con opción de restablecimiento.
-- **Workforce / Agent Definer y Semanas Operativas (`/app/workforce`):**
-  - Directorio de agentes con código natural único por tenant, BMS ID, Wave, correo y atributos personalizados JSONB.
-  - Catálogo de roles laborales y equipos de operación.
-  - **Semanas Operativas (`workforce_weeks`):** estructura formal de Lunes a Domingo con código canónico ISO (`YYYY-Www`).
-  - **Importador masivo de Rosters Excel:** ingesta streaming multi-hoja o de hoja única con auto-detección y normalización de encabezados.
-  - **Linaje temporal estricto:** asignaciones de equipo y jerarquías de supervisión versionadas con `valid_from` y `valid_to` para auditoría retrospectiva exacta.
-- **Asistente Operacional de Inteligencia / AI Chat (`/app/chat`):**
+- **Workforce / Agent Definer y Rosters Semanales (`/app/accounts/:accountId/workforce`):**
+  - **Catálogos exclusivos por cuenta (`account_id`):** tipos de empleado, equipos y agentes pertenecen estrictamente a una cuenta, garantizando confidencialidad entre operaciones.
+  - Directorio de agentes con código natural único, BMS ID, Wave, correo y atributos personalizados JSONB.
+  - **Semanas Operativas (`workforce_weeks`):** estructura formal de Lunes a Domingo con código canónico ISO (`YYYY-Www`) y unicidad por cuenta.
+  - **Rosters Semanales Versionados e Inmutables (`workforce_roster_versions` y `workforce_roster_entries`):**
+    - Congelación de snapshots de personal asignado tras la importación masiva de Excel.
+    - Publicación formal de versión oficial del roster por semana.
+    - Clonación rápida de rosters hacia semanas operativas futuras para planificación sin fricción.
+    - Vista dedicada por semana (`/app/accounts/:accountId/workforce/weeks/:weekId`) con selector de versiones históricas.
+- **Asistente Operacional de Inteligencia / AI Chat (`/app/accounts/:accountId/chat`):**
   - Arquitectura multi-proveedor desacoplada (`AIProvider`): Google Gemini en producción y Mock Determinista offline para pruebas y entornos locales sin API keys.
   - 7 herramientas estrictamente de solo lectura (`search_kpis`, `get_kpi_definition`, `describe_dataset`, `describe_relationships`, `run_semantic_query`, `get_employee_structure`, `get_published_dashboard`).
-  - Inyección obligatoria de `tenant_id` directamente desde la sesión del usuario, garantizando aislamiento total.
+  - Inyección obligatoria de `tenant_id` y `account_id` directamente desde la sesión del usuario, garantizando aislamiento total.
   - Respuestas con separación de hechos e interpretación, citas auditables con linaje (`grounding_context`) y límite duro de 5 turnos por interacción.
 
 ## Arquitectura y Stack
@@ -112,14 +121,15 @@ Luego abre `/login`. La primera entrada requerirá escanear o ingresar la clave 
 
 ## Navegación en la aplicación
 
-Una vez autenticado bajo `/app`, la barra de navegación unificada (`AppHeader`) brinda acceso a:
+Tras autenticarse en `/login`, la aplicación redirige al **Portal de Cuentas** (`/portal/accounts`), donde el usuario selecciona su operación activa. Dentro de cada cuenta, la barra de navegación unificada (`AppHeader`) brinda acceso contextual a:
 
-- `/app`: Organización, perfil de usuario, gestión de cuentas y miembros por rol.
-- `/app/datasets`: Gestión de datasets, carga CSV/XLSX y ciclo de vida dual (borrado/archivo).
-- `/app/kpis`: Capa Semántica, Lienzo Interactivo tipo Lucidchart y definición de KPIs gobernados.
-- `/app/dashboards`: Dashboards interactivos de 12 columnas, widgets ECharts y filtros operacionales.
-- `/app/workforce`: Directorio de agentes, equipos, roles, semanas operativas e importación de Roster Excel.
-- `/app/chat`: Asistente analítico IA de solo lectura con evidencia y linaje auditable.
+- `/portal/accounts`: Portal central de cuentas y campañas operacionales, con métricas en vivo, estados de roster y administración.
+- `/app/accounts/:accountId/datasets`: Gestión de datasets, carga CSV/XLSX y ciclo de vida dual (borrado/archivo).
+- `/app/accounts/:accountId/kpis`: Capa Semántica, Lienzo Interactivo tipo Lucidchart y definición de KPIs gobernados.
+- `/app/accounts/:accountId/dashboards`: Dashboards interactivos de 12 columnas, widgets ECharts y filtros operacionales.
+- `/app/accounts/:accountId/workforce`: Directorio de agentes, equipos, roles, semanas operativas e importación de Roster Excel.
+- `/app/accounts/:accountId/workforce/weeks/:weekId`: Vista detallada de semana operativa con rosters versionados inmutables (`v1`, `v2`...), publicación oficial y clonación.
+- `/app/accounts/:accountId/chat`: Asistente analítico IA de solo lectura con evidencia y linaje auditable.
 
 ## Validación y pruebas
 
@@ -138,7 +148,9 @@ npx pnpm audit --prod
 
 - **Pruebas unitarias:** 45 pruebas pasando (`packages/kpi`, `packages/contracts`, `packages/ingestion`, `apps/web/components/semantic-canvas`, `apps/api/src/identity/crypto`).
 - **Pruebas de integración real:** 54 pruebas pasando con PostgreSQL y RLS forzada (ingesta S3/BullMQ, ciclo dual de borrado y archivo, triggers PostgreSQL, compilación SQL multi-tabla, RLS cruzada entre organizaciones, linaje temporal de workforce y bucle de tools de AI Chat).
-- **Tipado estricto:** 0 errores en verificación de tipos Turborepo en los 7 paquetes.
+- **Aislamiento Composite RLS:** Certificación automatizada de 0 fugas de datos de personal, equipos, semanas y rosters entre cuentas de un mismo tenant.
+- **Tipado estricto:** 0 errores en verificación de tipos Turborepo y `next build` en los 7 paquetes.
+- **Migraciones canónicas:** 19 migraciones SQL aplicadas en base de datos (`001_foundations.sql` a `019_employee_relationships_account.sql`).
 
 ## Estado de implementación
 

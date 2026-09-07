@@ -1,46 +1,51 @@
-# Estado de implementación — 2026-09-06
+# Estado de implementación — 2026-09-06 (ATLAS v3)
 
-Este documento es el punto de entrada para continuar ATLAS. Las reglas obligatorias están en `AGENTS.md`, la experiencia en `design.md`, la arquitectura objetivo en `implementation.md` y las decisiones de ingesta/KPI en `docs/decisions/0002-ingestion-kpi.md`.
+Este documento es el punto de entrada para continuar ATLAS. Las reglas obligatorias están en `AGENTS.md`, la experiencia en `design.md`, la arquitectura objetivo en `implementation.md`, el plan de cuentas en `docs/plan-account-portal-workforce-security.md` y las decisiones de ingesta/KPI en `docs/decisions/0002-ingestion-kpi.md`.
 
 ## Funcionalidad operativa
 
 - Monorepo pnpm/Turborepo con Next.js, NestJS, PostgreSQL, Redis/BullMQ y MinIO.
 - Autenticación propia por email/contraseña, TOTP obligatorio para Admin, sesiones rotadas/revocables y capacidades centralizadas por rol.
 - Gestión integral de usuarios, perfiles personales (nombre, contraseña), y membresías con PostgreSQL RLS (`atlas_auth` / `atlas_app`).
-- Cuentas y campañas operacionales (`accounts`) con protección del último administrador y borrado seguro.
-- Aislamiento transaccional por tenant y PostgreSQL RLS forzada en todas las tablas de datos, modelos semánticos, dashboards, workforce y conversaciones de IA.
-- Ingesta real desde `/app/datasets`: CSV UTF-8 y XLSX; carga directa firmada a MinIO/S3; perfilado; validación regional; estrategias replace, append y upsert; inmutabilidad garantizada por triggers.
+- **Account Portal y Gestión de Operaciones (`/portal/accounts`):**
+  - Portal central post-login con tarjetas interactivas por cuenta/campaña.
+  - Conteo en vivo de recursos: datasets, KPIs, dashboards, semana operativa actual (`activeWeekCode`) y estado del roster (`rosterStatus`).
+  - Control de acceso por cuenta (`identity.membership_account_access`) y asignación granular de miembros.
+  - Ciclo de vida dual de cuentas: Hard Delete definitivo para cuentas vacías sin histórico y archivo lógico (`archived_at`) protegido por triggers de base de datos (`check_account_deletion_guard`, `23514`).
+  - Rotación transparente de tokens de sesión y cambio dinámico de contexto mediante `/api/v1/auth/switch-account`.
+- **Aislamiento en Profundidad por Cuenta (Composite RLS):**
+  - Contexto doble en sesión `(atlas.tenant_id, atlas.account_id)` forzado en PostgreSQL para todas las tablas operacionales.
+  - Certificación automatizada de 0 fugas de datos entre cuentas del mismo tenant.
+- Ingesta real desde `/app/accounts/:accountId/datasets`: CSV UTF-8 y XLSX; carga directa firmada a MinIO/S3; perfilado; validación regional; estrategias replace, append y upsert; inmutabilidad garantizada por triggers.
 - Ciclo de Vida Dual de Datasets y KPIs (Hard Delete + Archivo/Deprecación Gobernados):
-  - Borrado definitivo (Hard Delete): Para datasets y KPIs en estado borrador (sin versiones publicadas ni dependencias), con purga automática de filas en base de datos y archivos binarios en MinIO/S3.
-  - Baja lógica y Deprecación (Soft Delete / Archivo): Para datasets y KPIs que contienen datos publicados, garantizando la inmutabilidad histórica requerida por ATLAS (`AGENTS.md` §3). Se archivan datasets y deprecian KPIs ocultándolos de listas activas y del Asistente IA, pero preservando dashboards e informes pasados.
-  - Triggers de PostgreSQL en el motor de base de datos (`protect_published_dataset_delete`, `protect_published_version_delete`, `protect_published_kpi_delete`) que impiden a nivel de base de datos (`23514`) borrar físicamente cualquier dato publicado.
-  - Controles UI en `/app/datasets` y `/app/kpis`: botones contextuales, modales de confirmación adaptativos con advertencia de impacto, selector para mostrar u ocultar archivados/deprecados y reactivación de datasets.
-- Capa Semántica y Motor KPI en `/app/kpis`: uniones multi-tabla gobernadas por grafo BFS determinista sin ciclos ni ambigüedades; DSL segura; targets operacionales, advertencias y críticos; cálculo con caché, rangos temporales y linaje auditado.
-- Lienzo Visual Interactivo tipo Lucidchart (`@xyflow/react`) en `/app/kpis`: vista dual interactiva/tabla, nodos de datasets y KPIs, aristas con enrutamiento horizontal inteligente y halo de contraste en primer plano, simulador determinista de rutas de consulta (BFS), constructor visual de fórmulas con autocompletado y auto-layout con Dagre.
-- Edición de KPIs con Versionado Inmutable: soporte para modificar fórmulas y metas generando automáticamente la versión `v{number + 1}`, manteniendo intactas las versiones históricas para asegurar reproducibilidad.
-- Mapeo Dinámico de Workforce (`kpi_versions.workforce_mapping`): enlace declarativo entre datasets operativos de llamadas/tickets y las dimensiones de personal (Supervisor, Floor Manager, Wave, Team) sin requerir desnormalización previa de archivos importados.
-- Dashboards Gobernados en `/app/dashboards`: cuadrícula responsive de 12 columnas con drag-and-drop (`GripVertical`), widgets interactivos ECharts (`kpi_card`, `line_chart`, `bar_chart`, `area_chart`, `table`, `text`), alternativas tabulares accesibles obligatorias (WCAG 2.2 AA), filtros temporales globales con auto-detección de columnas de fecha, filtros operacionales de call center (Supervisor, FM, Wave) con dropdowns dinámicos, exportación a CSV, edición efímera para no-administradores y publicación oficial inmutable.
-- Workforce, Agent Definer y Semanas Operativas en `/app/workforce`:
-  - Directorio de agentes con código natural único por tenant, BMS ID, Wave, correo y atributos personalizados JSONB.
-  - Catálogo de roles laborales y equipos de operación.
+  - Borrado definitivo (Hard Delete): Para datasets y KPIs en estado borrador (sin versiones publicadas ni dependencias), con purga automática física de filas y versiones S3 (`storage.purge`).
+  - Baja lógica y Deprecación (Soft Delete / Archivo): Para datasets y KPIs que contienen datos publicados, garantizando la inmutabilidad histórica requerida por ATLAS (`AGENTS.md` §3).
+  - Triggers de PostgreSQL (`protect_published_dataset_delete`, `protect_published_version_delete`, `protect_published_kpi_delete`, `23514`).
+- Capa Semántica y Motor KPI en `/app/accounts/:accountId/kpis`: uniones multi-tabla gobernadas por grafo BFS determinista sin ciclos ni ambigüedades; DSL segura; targets operacionales, advertencias y críticos; cálculo con caché LRU acotada (500 entradas), rangos temporales y linaje auditado.
+- Lienzo Visual Interactivo tipo Lucidchart (`@xyflow/react`): vista dual interactiva/tabla, nodos de datasets y KPIs, aristas con enrutamiento horizontal inteligente y halo de contraste en primer plano, simulador determinista de rutas de consulta (BFS), constructor visual de fórmulas con autocompletado y auto-layout con Dagre.
+- Edición de KPIs con Versionado Inmutable: modificación de fórmulas y metas generando automáticamente la versión `v{number + 1}`, manteniendo vivas las versiones históricas.
+- Mapeo Dinámico de Workforce (`kpi_versions.workforce_mapping`): enlace declarativo entre datasets operativos y dimensiones de personal (Supervisor, Floor Manager, Wave, Team) sin alterar los datos importados.
+- Dashboards Gobernados en `/app/accounts/:accountId/dashboards`: cuadrícula responsive de 12 columnas con drag-and-drop (`GripVertical`), widgets interactivos ECharts, alternativas tabulares accesibles obligatorias (WCAG 2.2 AA), filtros temporales globales, filtros operacionales de call center (Supervisor, FM, Wave) con dropdowns dinámicos, edición efímera para no-administradores y publicación oficial inmutable.
+- Workforce, Catálogos Exclusivos y Rosters Semanales Versionados en `/app/accounts/:accountId/workforce`:
+  - **Catálogos de personal exclusivos por cuenta:** tipos de empleado, equipos y agentes pertenecen estrictamente a una cuenta (`account_id`), impidiendo mezclas indebidas entre operaciones.
   - Semanas Operativas (`workforce_weeks`) formalizadas de Lunes a Domingo con código ISO (`YYYY-Www`).
-  - Importador masivo de Rosters Excel streaming (`ExcelJS`) con auto-detección multi-hoja y normalización inteligente de columnas.
-  - Historial de asignaciones y relaciones de supervisión con soporte temporal estricto (`valid_from` y `valid_to`).
-- Asistente Operacional de Inteligencia / AI Chat en `/app/chat`: arquitectura multi-proveedor desacoplada (Google Gemini y Mock Determinista), tools 100% de solo lectura gobernadas (`search_kpis`, `get_kpi_definition`, `describe_dataset`, `describe_relationships`, `run_semantic_query`, `get_employee_structure`, `get_published_dashboard`), inyección estricta de tenant desde la sesión, persistencia de linaje y evidencia (`grounding_context`), prevención de prompt injection, y límite estricto de 5 turnos por consulta.
-- Navegación Unificada (`AppHeader`): integrada en `/app`, `/app/datasets`, `/app/kpis`, `/app/dashboards`, `/app/workforce` y `/app/chat`, con diálogo de perfil de usuario y cambio de contraseña.
+  - **Rosters Semanales Versionados e Inmutables (`workforce_roster_versions` y `workforce_roster_entries`):** congelación de snapshots de personal importado, publicación oficial de versión y clonación ágil hacia semanas futuras.
+  - Vista dedicada por semana (`/app/accounts/:accountId/workforce/weeks/:weekId`) con selector de versiones históricas e inspección de jerarquías.
+- Asistente Operacional de Inteligencia / AI Chat en `/app/accounts/:accountId/chat`: arquitectura multi-proveedor desacoplada (Google Gemini y Mock Determinista), tools 100% de solo lectura gobernadas, inyección estricta de tenant y cuenta activa desde la sesión, persistencia de linaje y evidencia (`grounding_context`), y límite estricto de 5 turnos por consulta.
+- Navegación Unificada (`AppHeader`): integrada en `/portal/accounts` y en todas las rutas `/app/accounts/:accountId/...`, con indicador de cuenta activa, cambio rápido de operación y diálogo de perfil de usuario.
 
 ## Contratos y ubicación del código
 
-- Contratos HTTP/Zod: `packages/contracts/src/data.ts`, `kpi.ts`, `dashboard.ts`, `workforce.ts`, `ai.ts` e `identity.ts`.
-- Ingesta y almacenamiento: `packages/ingestion/src/`.
-- Motor semántico y compilador de fórmulas: `packages/kpi/src/`.
+- Contratos HTTP/Zod: `packages/contracts/src/data.ts`, `kpi.ts`, `dashboard.ts`, `workforce.ts`, `ai.ts`, `auth.ts` e `index.ts`.
+- Ingesta y almacenamiento: `packages/ingestion/src/` (con soporte `storage.purge()`).
+- Motor semántico y compilador de fórmulas: `packages/kpi/src/` (con caché LRU acotada).
 - Servicios API NestJS: `apps/api/src/dashboards/`, `apps/api/src/workforce/`, `apps/api/src/ai/`, `apps/api/src/identity/` y `apps/api/src/organizations/`.
 - Ingesta de Rosters Excel: `apps/api/src/workforce/excel-roster.ts`.
 - Lienzo visual semántico: `apps/web/components/semantic-canvas/`.
 - Rutas HTTP y composición Nest: `apps/api/src/app.ts`.
 - Consumidor BullMQ: `apps/worker/src/main.ts`.
-- UI Web: `apps/web/app/app/datasets/page.tsx`, `kpis/page.tsx`, `dashboards/page.tsx`, `workforce/page.tsx`, `chat/page.tsx` y `page.tsx`.
-- Esquema de base de datos: migraciones `001_foundations.sql` a `016_workforce_weeks_and_dynamic_mapping.sql`.
+- UI Web: `apps/web/app/portal/accounts/page.tsx`, `apps/web/app/app/accounts/[accountId]/layout.tsx`, `datasets/page.tsx`, `kpis/page.tsx`, `dashboards/page.tsx`, `workforce/page.tsx`, `workforce/weeks/[weekId]/page.tsx`, `chat/page.tsx`.
+- Esquema de base de datos: 19 migraciones `001_foundations.sql` a `019_employee_relationships_account.sql`.
 
 ## Pendiente inmediato (Fase 6 — Hardening y piloto)
 
@@ -54,13 +59,40 @@ Este documento es el punto de entrada para continuar ATLAS. Las reglas obligator
 
 - Unitarias: 45 pruebas pasando (`vitest run`), cubriendo DSL, inferencia tipada, parseo de fórmulas, aislamiento de secretos, detección de ciclos en grafo semántico y contratos de workforce y AI.
 - Integración real: 54 pruebas pasando (`vitest run --config vitest.integration.config.ts`), cubriendo ingestión S3/BullMQ, RLS forzada entre organizaciones (Tenant A vs Tenant B), ciclo de vida dual (borrado definitivo de borradores, archivo de publicados, reactivación y bloqueos por triggers en PostgreSQL), compilación SQL multi-tabla, inmutabilidad de dashboards, versiones de KPI, linaje temporal de workforce, semanas operativas y bucle de tools de AI Chat.
-- Tipos TypeScript: 0 errores bajo configuración estricta en los 7 paquetes (`turbo run typecheck`, 11 tareas exitosas en `@atlas/web`, `@atlas/api`, `@atlas/contracts`, `@atlas/ingestion`, `@atlas/kpi`, `@atlas/database`, `@atlas/worker`).
-- Compilación de producción: `next build` en `@atlas/web` completado exitosamente.
+- Aislamiento Composite RLS: Certificación automatizada en PostgreSQL de 0 fugas de datos entre cuentas distintas de la misma organización.
+- Tipos TypeScript y Turbo Build: 0 errores bajo configuración estricta en los 7 paquetes (`turbo run build`, 7 tareas exitosas en `@atlas/web`, `@atlas/api`, `@atlas/contracts`, `@atlas/ingestion`, `@atlas/kpi`, `@atlas/database`, `@atlas/worker`).
+- Compilación de producción: `next build` en `@atlas/web` completado exitosamente sin advertencias.
 
-Los servicios locales esperados son web `127.0.0.1:3000`, API `127.0.0.1:4000`, PostgreSQL `54329`, Redis `63799` y MinIO `9009`. La vista `/` sigue siendo un ejemplo sintético; los datos reales viven bajo `/app`.
+Los servicios locales esperados son web `127.0.0.1:3000`, API `127.0.0.1:4000`, PostgreSQL `54329`, Redis `63799` y MinIO `9009`. La vista `/` sigue siendo un ejemplo sintético; los datos reales viven bajo `/portal/accounts` y `/app/accounts/:accountId/...`.
 
 
 ## Changelog de entregas
+
+### 2026-09-06 — ATLAS v3: Account Portal, Composite RLS Isolation y Rosters Semanales Versionados
+
+Implementación integral de la arquitectura v3 basada en `docs/plan-account-portal-workforce-security.md`:
+
+- **Clean Slate de Datos Operativos:** Aplicada la migración `017_account_scoping_and_clean_slate.sql`, depurando datasets, KPIs, dashboards, conversaciones y registros laborales heredados, conservando exclusivamente la organización y credenciales del usuario `admin@atlas.test`.
+- **Aislamiento Compuesto en Profundidad (Composite RLS):**
+  - Incorporada la columna `account_id` con clave foránea compuesta `(tenant_id, account_id)` en todas las entidades operacionales.
+  - Implementado helper `withAccount<T>(pool, tenantId, accountId, action)` en `@atlas/database`.
+  - Políticas RLS compuestas aplicadas en `datasets`, `kpi_versions`, `dashboards`, `workforce_weeks`, `employees`, `teams`, `employee_types` y `conversations`.
+  - Certificación con script automatizado de 0 fugas de datos entre cuentas del mismo tenant.
+- **Account Portal (`/portal/accounts`):**
+  - Página Next.js con tarjetas interactivas que muestran nombre, zona horaria, badges de estado, métricas en vivo (datasets, KPIs, dashboards), semana operativa activa (`activeWeekCode`) y estado del roster (`rosterStatus`).
+  - Botón principal "Entrar a la cuenta" que invoca `/api/v1/auth/switch-account` para rotar la sesión e ingresa a `/app/accounts/:accountId/datasets`.
+  - Modales administrativos para Crear Cuenta, Editar Cuenta, Archivar/Eliminar (con trigger de protección `23514`) y Gestión de Miembros.
+- **Rosters Semanales Versionados e Inmutables (`workforce_roster_versions` y `workforce_roster_entries`):**
+  - Migraciones `018_workforce_roster_versions_and_bindings.sql` y `019_employee_relationships_account.sql`.
+  - Ingesta streaming de rosters Excel que genera snapshots congelados inmutables (`v1`, `v2`...).
+  - Endpoints en `workforce.controller.ts`: `/weeks/:weekId/rosters`, `/roster-versions/:versionId/entries`, `/roster-versions/:versionId/publish` y `/weeks/:weekId/clone-roster`.
+  - Nueva vista de detalle semanal en `/app/accounts/:accountId/workforce/weeks/:weekId` con selector de versiones históricas, tabla de personal, publicación de roster y clonación hacia semanas futuras.
+- **Catálogos de Personal Exclusivos por Cuenta:** `teams`, `employee_types` y `employees` pertenecen estrictamente a una cuenta, garantizando confidencialidad absoluta entre diferentes campañas u operaciones.
+- **Hardening del Motor de KPIs e Ingesta:**
+  - Sustituida la caché ilimitada por una **Bounded LRU Cache (500 entradas)** con TTL e invalidación por publicación.
+  - Soporte de purga física total (`storage.purge`) en MinIO/S3 para eliminación definitiva de drafts.
+  - Verificación de capacidad `workforce.read` antes de exponer dimensiones de supervisión o jerarquías.
+- **Verificación:** Monorepo compilado exitosamente (`turbo run build`, 7 de 7 paquetes exitosos), 45 pruebas unitarias pasando, 54 de integración real pasando y commit generado en branch `v3`.
 
 ### 2026-09-05 — Fase 2: Capa Semántica Multi-tabla y KPI Structure completada
 

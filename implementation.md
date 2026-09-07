@@ -86,12 +86,15 @@ Capacidades iniciales:
 
 Los roles se traducen a capacidades en un único módulo de autorización.
 
-### 3.2 Organizations & Accounts
+### 3.2 Organizations & Accounts (ATLAS v3)
 
-- Organization/Tenant representa al cliente aislado.
-- Account representa una campaña u operación del call center.
-- Zona horaria, locale y políticas viven en configuración del tenant.
-- Todas las entidades operacionales incorporan `tenant_id`.
+- **Organization/Tenant:** Representa la entidad corporativa o cliente aislado del SaaS multi-tenant (`tenant_id`).
+- **Account / Campaña Operacional:** Representa una línea de negocio, cliente o campaña de call center con **espacio de trabajo completamente aislado**:
+  - Aislamiento en profundidad mediante **Composite Row-Level Security (`atlas.tenant_id` + `atlas.account_id`)** en todas las tablas operacionales (datasets, modelos semánticos, KPIs, dashboards, personal y conversaciones).
+  - **Portal de Cuentas (`/portal/accounts`):** Punto de entrada post-login con tarjetas operacionales que consolidan en vivo: datasets, KPIs, dashboards, semana operativa activa (`activeWeekCode`) y estado del roster (`rosterStatus`).
+  - **Control de Acceso por Membresía:** Tabla `identity.membership_account_access` para asignación granular de miembros a cuentas específicas (los administradores acceden a todas las cuentas).
+  - **Rotación de Sesión Transparente:** Endpoint `/api/v1/auth/switch-account` que valida membresía y emite nuevos tokens de sesión rotados con el `account_id` activo.
+  - **Ciclo de Vida Dual de Cuentas:** Hard Delete definitivo para cuentas vacías sin histórico y archivo lógico (`archived_at`) protegido a nivel de base de datos por el trigger `check_account_deletion_guard` (`23514`).
 
 ### 3.3 Ingestion & Datasets
 
@@ -140,17 +143,19 @@ Los originales son inmutables. Las macros y fórmulas del archivo no se ejecutan
 
 Entidades:
 
-- `WorkforceWeek`: Semanas operativas formalizadas de Lunes a Domingo con código canónico ISO (`YYYY-Www`), estado (`open`, `closed`, `current`) y metadatos JSONB.
-- `Employee`: Código laboral único por tenant, nombre normalizado generado (`normalized_name`), cédula, BMS ID de marcador, cohorte de contratación (`wave`) y metadatos flexibles en JSONB (`custom_fields`).
-- `EmployeeType`: Catálogo de tipos de empleado y perfiles laborales.
-- `Team`: Equipos operativos de la campaña.
-- `EmploymentAssignment`: Asignaciones a equipos con vigencia temporal (`valid_from`, `valid_to`), vinculación opcional a `week_id` y metadatos JSONB.
-- `EmployeeRelationship`: Jerarquías de supervisión y reporte (`supervisor`, `mentor`, `manager`, `coach`, `floor_manager`, `operations_manager`) con soporte temporal estricto (`valid_from`, `valid_to`) y `week_id`.
+- `WorkforceWeek`: Semanas operativas formalizadas de Lunes a Domingo con código canónico ISO (`YYYY-Www`), estado (`open`, `closed`, `current`), unicidad por cuenta y metadatos JSONB.
+- `Employee`: Código laboral único por cuenta (`account_id`), nombre normalizado generado (`normalized_name`), cédula, BMS ID de marcador, cohorte de contratación (`wave`) y metadatos flexibles en JSONB (`custom_fields`).
+- `EmployeeType`: Catálogo de tipos de empleado y perfiles laborales exclusivo por cuenta (`account_id`).
+- `Team`: Equipos operativos exclusivos por cuenta (`account_id`).
+- `EmploymentAssignment`: Asignaciones a equipos con vigencia temporal (`valid_from`, `valid_to`), vinculación a `account_id` y `week_id`.
+- `EmployeeRelationship`: Jerarquías de supervisión y reporte con soporte temporal estricto (`valid_from`, `valid_to`), `week_id` y `account_id`.
+- `WorkforceRosterVersion`: Versiones inmutables de rosters semanales congelados tras la importación masiva (`version_number`, `status`, `row_count`, `published_at`).
+- `WorkforceRosterEntry`: Registros inmutables congelados por versión (código, BMS ID, equipo, rol, wave, supervisor, floor manager).
 
-**Importador Masivo de Rosters Excel:**
-- Parser streaming (`excel-roster.ts`) mediante `ExcelJS` capaz de procesar libros con múltiples hojas (una por semana operativa o campaña) o de hoja única.
-- Normalización automática de encabezados (código, nombre, correo, BMS ID, Wave, equipo, supervisor, rol).
-- Inserción y actualización atómica idempotente preservando el historial temporal.
+**Importador Masivo y Rosters Semanales Versionados:**
+- Parser streaming (`excel-roster.ts`) mediante `ExcelJS` capaz de procesar libros con múltiples hojas o de hoja única con detección automática de columnas.
+- Generación automática de versiones inmutables del roster (`workforce_roster_versions`), permitiendo publicar snapshots oficiales y clonar rosters entre semanas operativas.
+- Vista dedicada por semana en `/app/accounts/:accountId/workforce/weeks/:weekId` para auditar el personal congelado, publicar versiones y clonar asignaciones hacia el futuro.
 
 ### 3.5 Semantic Model & KPI Structure
 
@@ -478,14 +483,24 @@ Salida: estructura de personal versionada y semanas operativas enlazadas dinámi
 
 Salida: preguntas operacionales respondidas mediante Query API con contexto verificable y linaje auditable.
 
-### Fase 6 — Hardening y piloto [En curso / Planificada]
+### Fase 6 — ATLAS v3: Account Portal, Composite RLS y Rosters Semanales [Completada]
+
+- **Clean Slate y Aislamiento por Cuenta:** Migración `017_account_scoping_and_clean_slate.sql`, composite RLS `(atlas.tenant_id, atlas.account_id)` en todas las entidades de negocio.
+- **Account Portal (`/portal/accounts`):** Selección post-login con métricas en vivo (datasets, KPIs, dashboards, semana activa, estado de roster), ciclo de vida dual (Hard Delete vs. Archivo con trigger `23514`) y control de acceso granular por miembro (`identity.membership_account_access`).
+- **Navegación Contextual (`/app/accounts/:accountId/...`):** Barra unificada `AppHeader` con chip de cuenta activa y selector hacia el portal. Rotación de tokens con `/api/v1/auth/switch-account`.
+- **Catálogos de Workforce Exclusivos por Cuenta:** Catálogos de roles, equipos y agentes aislados por `account_id` sin mezcla entre campañas.
+- **Rosters Semanales Versionados e Inmutables:** Migraciones `018` y `019`. Tablas inmutables `workforce_roster_versions` y `workforce_roster_entries`, publicación oficial de snapshots, clonación de rosters y vista de semana operativa en `/app/accounts/:accountId/workforce/weeks/:weekId`.
+- **Hardening:** Bounded LRU Cache (500 entradas) en motor de consultas KPI, soporte `storage.purge` para borrado definitivo en S3/MinIO y validación de permisos `workforce.read`.
+
+Salida: cuentas convertidas en espacios operacionales completos y aislados, con portal interactivo y rosters semanales versionados e inmutables.
+
+### Fase 7 — Hardening y piloto [En curso / Planificada]
 
 - Certificación de pruebas de volumen masivo (250 MB, 20M filas) midiendo tiempos y memoria del worker thread.
 - Observabilidad OpenTelemetry, métricas Prometheus y trazas estructuradas.
 - Backups automáticos y recuperación ante desastres en MinIO y PostgreSQL.
 - Threat modeling y revisión final de privacidad y aislamiento.
 - Piloto multi-tenant aislado con datos sintéticos y validación final de accesibilidad WCAG 2.2 AA.
-
 
 Salida: piloto con dos tenants, datos sintéticos y criterios de aceptación cumplidos.
 
