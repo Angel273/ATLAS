@@ -321,7 +321,7 @@ export class KpiService {
       }
 
       const ast = parseFormula(input.formula);
-      compileFormula(ast, tables, source.dataset.slug, [input.datasetVersionId]);
+      compileFormula(ast, tables, source.dataset.slug, [input.datasetVersionId], input.unit);
 
       await client.query(
         'INSERT INTO semantic_model_versions(tenant_id, account_id, dataset_version_id, fields) VALUES ($1, $2, $3, $4) ON CONFLICT(tenant_id, dataset_version_id) DO NOTHING',
@@ -610,7 +610,7 @@ export class KpiService {
     const bind = (value: unknown) => { parameters.push(value); return `$${parameters.length}`; };
 
     // Compile formula with resolved tables
-    const compiled = compileFormula(ast, tableContexts, rootSource.dataset.slug, parameters);
+    const compiled = compileFormula(ast, tableContexts, rootSource.dataset.slug, parameters, kpi.unit);
 
     // Resolve field reference across available tables
     const resolveField = (rawName: string, isFilterOrTimeRange = false): { alias: string; field: SourceField } | null => {
@@ -831,7 +831,11 @@ export class KpiService {
     await client.query("SET LOCAL work_mem = '16MB'");
     await client.query("SET LOCAL timezone = 'UTC'");
 
-    const sql = `SELECT ${dimensions.map((s, i) => `${s} AS d${i}`).join(',')}${dimensions.length ? ',' : ''} ROUND((${compiled.sql})::numeric, ${bind(kpi.precision)}::int)::text AS value FROM ${rootSource.relation} AS source${joinSql}${wfJoinSql} ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''} ${dimensions.length ? `GROUP BY ${dimensions.map((_, i) => i + 1).join(',')} ORDER BY ${dimensions.map((_, i) => `${i + 1} NULLS LAST`).join(',')}` : ''} LIMIT ${bind(input.limit + 1)}::int`;
+    const valueExpr = kpi.unit === 'text'
+      ? `(${compiled.sql})::text`
+      : `ROUND((${compiled.sql})::numeric, ${bind(kpi.precision)}::int)::text`;
+
+    const sql = `SELECT ${dimensions.map((s, i) => `${s} AS d${i}`).join(',')}${dimensions.length ? ',' : ''} ${valueExpr} AS value FROM ${rootSource.relation} AS source${joinSql}${wfJoinSql} ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''} ${dimensions.length ? `GROUP BY ${dimensions.map((_, i) => i + 1).join(',')} ORDER BY ${dimensions.map((_, i) => `${i + 1} NULLS LAST`).join(',')}` : ''} LIMIT ${bind(input.limit + 1)}::int`;
 
     const rows = (await client.query<Record<string, string | null>>(sql, parameters)).rows;
     const targetEval = evaluateTarget(rows[0]?.value ?? null, kpi.targetDirection, kpi.targets);

@@ -35,7 +35,7 @@ export interface KpiNodeData {
   name: string;
   description?: string | undefined;
   formula: string;
-  unit: 'number' | 'percent' | 'seconds';
+  unit: 'number' | 'percent' | 'seconds' | 'text';
   precision: number;
   datasetVersionId: string;
   datasetName?: string | undefined;

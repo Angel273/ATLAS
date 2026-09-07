@@ -78,7 +78,7 @@ interface SemanticCanvasProps {
     datasetVersionId: string;
     relatedDatasetVersionIds: string[];
     formula: string;
-    unit: 'number' | 'percent' | 'seconds';
+    unit: 'number' | 'percent' | 'seconds' | 'text';
     precision: number;
     dimensions: string[];
     targetDirection: 'higher_is_better' | 'lower_is_better' | 'target_match';

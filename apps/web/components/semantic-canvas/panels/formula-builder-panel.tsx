@@ -24,7 +24,7 @@ interface FormulaBuilderPanelProps {
     datasetVersionId: string;
     relatedDatasetVersionIds: string[];
     formula: string;
-    unit: 'number' | 'percent' | 'seconds';
+    unit: 'number' | 'percent' | 'seconds' | 'text';
     precision: number;
     dimensions: string[];
     targetDirection: TargetDirection;
@@ -52,7 +52,7 @@ export function FormulaBuilderPanel({
   const [sourceVersionId, setSourceVersionId] = useState('');
   const [relatedVersionIds, setRelatedVersionIds] = useState<string[]>([]);
   const [formula, setFormula] = useState('');
-  const [unit, setUnit] = useState<'number' | 'percent' | 'seconds'>('number');
+  const [unit, setUnit] = useState<'number' | 'percent' | 'seconds' | 'text'>('number');
   const [precision, setPrecision] = useState(2);
   const [targetDirection, setTargetDirection] = useState<TargetDirection>('higher_is_better');
   const [targetVal, setTargetVal] = useState('');
@@ -486,6 +486,7 @@ export function FormulaBuilderPanel({
               <option value="number">Número (#)</option>
               <option value="percent">Porcentaje (%)</option>
               <option value="seconds">Segundos (s)</option>
+              <option value="text">Texto / Categoría (txt)</option>
             </select>
           </div>
           <div>

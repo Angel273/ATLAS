@@ -14,7 +14,7 @@ import type { KpiNodeData } from '../types';
 /**
  * Renderiza la etiqueta visual de unidad de medida para el KPI (% porcentaje, seg segundos, o numérico).
  */
-function UnitBadge({ unit }: { unit: 'number' | 'percent' | 'seconds' }) {
+function UnitBadge({ unit }: { unit: 'number' | 'percent' | 'seconds' | 'text' }) {
   switch (unit) {
     case 'percent':
       return (
@@ -26,6 +26,12 @@ function UnitBadge({ unit }: { unit: 'number' | 'percent' | 'seconds' }) {
       return (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '10px', padding: '1px 5px', borderRadius: '3px', background: '#F2E8DC', color: '#873B1B', fontWeight: 600 }}>
           <Clock size={10} /> SEG
+        </span>
+      );
+    case 'text':
+      return (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '10px', padding: '1px 5px', borderRadius: '3px', background: '#EFE6F8', color: '#5B21B6', fontWeight: 600 }}>
+          TXT
         </span>
       );
     case 'number':

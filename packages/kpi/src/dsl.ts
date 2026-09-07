@@ -107,7 +107,8 @@ export function compileFormula(
   ast: Ast,
   fieldsOrTables: readonly SourceField[] | TableContext[],
   table: string,
-  parameters: unknown[]
+  parameters: unknown[],
+  expectedUnit: string = 'number'
 ): { sql: string; hasDivision: boolean; referencedTables: string[] } {
 
   const isTableContextArray = (items: readonly unknown[]): items is TableContext[] =>
@@ -161,8 +162,18 @@ export function compileFormula(
     }
     const args = node.args.map(visit), name = node.name;
     const arity = (min: number, max = min) => { if (args.length < min || args.length > max) fail('FUNCTION_ARITY'); };
+    if (['MODE', 'FIRST'].includes(name)) {
+      arity(1); const arg = args[0]!; if (arg.aggregate) return fail('NESTED_AGGREGATE');
+      if (name === 'MODE') {
+        return { sql: `MODE() WITHIN GROUP (ORDER BY ${arg.sql})`, type: arg.type, aggregate: true, row: false };
+      }
+      return { sql: `MIN(${arg.sql})`, type: arg.type, aggregate: true, row: false };
+    }
     if (['SUM','AVG','MIN','MAX','COUNT','COUNT_DISTINCT'].includes(name)) {
       arity(1); const arg = args[0]!; if (arg.aggregate) return fail('NESTED_AGGREGATE');
+      if (['MIN','MAX'].includes(name) && arg.type === 'string') {
+        return { sql: `${name}(${arg.sql})`, type: 'string', aggregate: true, row: false };
+      }
       if (!['COUNT','COUNT_DISTINCT'].includes(name) && !numeric(arg.type)) return fail('FORMULA_TYPE');
       return { sql: name === 'COUNT_DISTINCT' ? `COUNT(DISTINCT ${arg.sql})` : `${name}(${arg.sql})`, type: 'numeric', aggregate: true, row: false };
     }
@@ -201,8 +212,14 @@ export function compileFormula(
     }
     return fail('FUNCTION_UNAVAILABLE');
   }
-  const result = visit(ast);
-  if (result.row || !result.aggregate || result.type !== 'numeric') return fail('AGGREGATE_REQUIRED');
+  let result = visit(ast);
+  if (expectedUnit === 'text') {
+    if (result.row) {
+      result = { sql: `MAX(${result.sql})`, type: result.type, aggregate: true, row: false };
+    }
+  } else {
+    if (result.row || !result.aggregate || result.type !== 'numeric') return fail('AGGREGATE_REQUIRED');
+  }
   // Evaluate warnings at the same aggregation level, including row-level divisions.
   return { sql: result.sql, hasDivision: divisions.length > 0, referencedTables: Array.from(referencedTables) };
 }

@@ -69,6 +69,19 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: 'list_datasets',
+    description: 'Lista los datasets publicados en el tenant con sus nombres, slugs y campos/columnas disponibles (incluyendo columnas calculadas por IA).',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Término opcional de búsqueda por nombre, slug o campo (ej. "voc", "categoria_contacto", "satisfaccion").',
+        },
+      },
+    },
+  },
+  {
     name: 'describe_dataset',
     description: 'Obtiene el esquema, campos destino, tipos de datos y versiones publicadas de un dataset.',
     parameters: {
@@ -76,7 +89,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       properties: {
         datasetId: {
           type: 'string',
-          description: 'Identificador UUID del dataset.',
+          description: 'Identificador UUID o slug del dataset.',
         },
       },
       required: ['datasetId'],
@@ -254,6 +267,38 @@ export async function executeTool(
             factType: 'calculation',
           });
         }
+        break;
+      }
+      case 'list_datasets': {
+        const query = typeof rawArgs.query === 'string' ? rawArgs.query.toLowerCase().trim() : '';
+        const datasets = await services.ingestion.list(actor);
+        const items = [];
+        for (const ds of datasets.items) {
+          const versions = await services.ingestion.versions(actor, ds.id);
+          const current = versions.items.find(v => v.id === ds.currentVersionId) || versions.items[0];
+          const fields = current?.mapping?.fields || [];
+          if (query) {
+            const matchesName = ds.name.toLowerCase().includes(query) || ds.slug.toLowerCase().includes(query);
+            const matchesField = fields.some(f => f.target.toLowerCase().includes(query) || f.source.toLowerCase().includes(query));
+            if (!matchesName && !matchesField) continue;
+          }
+          items.push({
+            id: ds.id,
+            slug: ds.slug,
+            name: ds.name,
+            currentVersionId: ds.currentVersionId,
+            fields,
+            rowCount: current?.rows || 0,
+            publishedAt: current?.publishedAt,
+          });
+          citations.push({
+            datasetVersionId: current?.id,
+            datasetSlug: ds.slug,
+            title: `Dataset: ${ds.name}`,
+            factType: 'fact',
+          });
+        }
+        result = { count: items.length, datasets: items };
         break;
       }
 

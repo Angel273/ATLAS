@@ -65,7 +65,7 @@ export const kpiCreateSchema = z.object({
   datasetVersionId: z.uuid(),
   relatedDatasetVersionIds: z.array(z.uuid()).max(5).default([]),
   formula: z.string().min(1).max(4000),
-  unit: z.enum(['number','percent','seconds']),
+  unit: z.enum(['number','percent','seconds','text']),
   precision: z.number().int().min(0).max(12),
   dimensions: z.array(z.string().regex(/^[a-z][a-z0-9_]{0,62}(?:\.[a-z][a-z0-9_]{0,62})?$/)).max(10),
   targetDirection: targetDirectionSchema.default('higher_is_better'),

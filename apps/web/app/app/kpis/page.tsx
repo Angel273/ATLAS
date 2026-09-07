@@ -45,7 +45,7 @@ export default function KpisPage() {
   const [formSlug, setFormSlug] = useState('');
   const [formDescription, setFormDescription] = useState('');
   const [formFormula, setFormFormula] = useState('');
-  const [formUnit, setFormUnit] = useState<'number' | 'percent' | 'seconds'>('number');
+  const [formUnit, setFormUnit] = useState<'number' | 'percent' | 'seconds' | 'text'>('number');
   const [formPrecision, setFormPrecision] = useState(2);
   const [formTargetDirection, setFormTargetDirection] = useState<'higher_is_better' | 'lower_is_better' | 'target_match'>('higher_is_better');
   const [formTarget, setFormTarget] = useState('');
@@ -333,7 +333,7 @@ export default function KpisPage() {
     datasetVersionId: string;
     relatedDatasetVersionIds: string[];
     formula: string;
-    unit: 'number' | 'percent' | 'seconds';
+    unit: 'number' | 'percent' | 'seconds' | 'text';
     precision: number;
     dimensions: string[];
     targetDirection: 'higher_is_better' | 'lower_is_better' | 'target_match';
@@ -644,11 +644,12 @@ export default function KpisPage() {
                     <select
                       name="unit"
                       value={formUnit}
-                      onChange={e => setFormUnit(e.target.value as 'number' | 'percent' | 'seconds')}
+                      onChange={e => setFormUnit(e.target.value as 'number' | 'percent' | 'seconds' | 'text')}
                     >
                       <option value="number">Número</option>
                       <option value="percent">Porcentaje (escala 0–100)</option>
                       <option value="seconds">Segundos</option>
+                      <option value="text">Texto / Categoría</option>
                     </select>
                   </label>
                   <label className="field">
@@ -1282,7 +1283,7 @@ export default function KpisPage() {
                             <th key={name}>{name}</th>
                           ))}
                           <th>
-                            Valor · {selected.unit === 'percent' ? '%' : selected.unit === 'seconds' ? 'segundos' : 'número'}
+                            Valor · {selected.unit === 'percent' ? '%' : selected.unit === 'seconds' ? 'segundos' : selected.unit === 'text' ? 'texto' : 'número'}
                           </th>
                         </tr>
                       </thead>
