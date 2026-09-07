@@ -494,6 +494,15 @@ Salida: preguntas operacionales respondidas mediante Query API con contexto veri
 
 Salida: cuentas convertidas en espacios operacionales completos y aislados, con portal interactivo y rosters semanales versionados e inmutables.
 
+### Fase 7 — Columna Asistida por IA, Deduplicación Semántica y Ampliación de Asistente IA [Completada]
+
+- **Columna Asistida por IA en Datasets (`POST /api/v1/datasets/:id/ai-column`):** Enriquecimiento por lotes de datasets generando versiones inmutables `v{N+1}` (`base_version_id`). Inferencia estructurada JSON (Gemini o Mock), filtrado automático de registros vacíos (`hasMeaningfulData`) para ahorro de costos y tokens, previsualización de 3 filas con muestreo inteligente (`previewAiColumn`), 4 plantillas de Call Center y monitoreo en vivo con barra de progreso.
+- **Deduplicación en Lienzo Semántico (KPI Definer):** `uniqueSources` en `SemanticCanvas` para renderizar un solo nodo por dataset con la versión activa más reciente (`v3` con 11 campos). Eliminado el error de claves duplicadas en ReactFlow y `<MiniMap>`. Selectores y contadores del toolbar ajustados.
+- **Asistente IA Ampliado (25 Turnos):** Aumento de `maxTurns` de 5 a 25 en `ConversationsService`.
+- **Pausa Gobernada de Workforce:** Ocultamiento del módulo en navegación y herramientas de IA (`WORKFORCE_MODULE_ENABLED = false`), con vistas de estado en pausa en `/app/workforce`.
+
+Salida: datasets enriquecidos con IA sin mutar histórico, lienzo semántico corregido y Asistente IA libre de bloqueos prematuros por límite de turnos.
+
 ### Fase 7 — Hardening y piloto [En curso / Planificada]
 
 - Certificación de pruebas de volumen masivo (250 MB, 20M filas) midiendo tiempos y memoria del worker thread.
@@ -742,10 +751,25 @@ Se integró el modelo operacional semanal de call center y la conexión directa 
 - **UI Web Completa en `/app/workforce` y `/app/kpis`:**
   - En `/app/workforce`: Modal de importación de Roster Excel con drag-and-drop, vista previa de hojas detectadas, resumen de mapeo y ejecución transaccional; selector de semanas operativas; y directorio con filtros de BMS ID, Wave y supervisor.
   - En `/app/kpis`: Sección de configuración de Mapeo de Workforce en el formulario y en el lienzo visual interactivo.
-- **Verificación Completa:**
-  - 45 pruebas unitarias pasando al 100% (`pnpm test`).
-  - 54 pruebas de integración pasando al 100% (`pnpm test:integration`), incluyendo `workforce.integration.test.ts` y `semantic.integration.test.ts`.
-  - 0 errores de tipado TypeScript en Turborepo en los 7 paquetes (`turbo run typecheck`).
+### [2026-09-07] — Columna Asistida por IA en Datasets, Deduplicación en Lienzo Semántico, Límite de 25 Turnos IA y Pausa Gobernada de Workforce
+
+Se implementó el ciclo completo de enriquecimiento de datasets con IA, corrección de reactividad en la capa semántica y optimización del asistente conversacional:
+
+- **Enriquecimiento de Datasets con IA (`POST /api/v1/datasets/:id/ai-column`):**
+  - Contratos Zod en `@atlas/contracts` (`aiColumnConfigSchema`, `aiColumnPreviewInputSchema`, `aiColumnCreateInputSchema`).
+  - Motor BullMQ en `@atlas/ingestion` (`processAiColumn`) con inferencia JSON estructurada via Google Gemini REST y fallback mock.
+  - **Filtrado inteligente de registros vacíos (`hasMeaningfulData`)**: Registros sin datos en las columnas de contexto seleccionadas no invocan la API del LLM y retornan `null` directamente, optimizando tokens y latencia.
+  - **Muestreo en previsualización (`previewAiColumn`)**: Prioriza registros no vacíos para entregar 3 casos representativos.
+  - Modal UI en `/app/datasets` con 4 plantillas de Call Center (*Sentimiento*, *Categoría / Motivo*, *Urgencia*, *Cliente Insatisfecho*), previsualización en vivo y barra de progreso.
+- **Lienzo Semántico e Inmutabilidad de Versiones (`SemanticCanvas`):**
+  - Corrección de la advertencia React `Encountered two children with the same key` en `<MiniMap>`.
+  - Deduplicación mediante `uniqueSources` conservando un solo nodo por dataset con la versión activa/más reciente (`v3` con 11 campos).
+  - Ordenamiento en `loadSources` priorizando `dataset.currentVersionId`.
+- **Ampliación de Asistente IA a 25 Turnos:**
+  - `maxTurns` incrementado de 5 a 25 en `ConversationsService`.
+- **Pausa Gobernada de Workforce:**
+  - Feature flag `WORKFORCE_MODULE_ENABLED = false` excluyendo `get_employee_structure` de Gemini `TOOL_DEFINITIONS`.
+  - Ocultamiento de la pestaña Workforce en `AppHeader` y renderizado de pantalla de pausa informativa en `/app/workforce`.
 
 
 

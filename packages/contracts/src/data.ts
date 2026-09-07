@@ -39,7 +39,59 @@ export const uploadCreateSchema = z.object({ filename: z.string().min(1).max(200
 export const datasetSchema = z.object({ id: z.uuid(), name: z.string(), slug: z.string(), currentVersionId: z.uuid().nullable(), archivedAt: z.string().nullable().default(null), createdAt: z.string(), accountId: z.uuid().optional() }).strict();
 export const datasetListSchema = z.object({ items: z.array(datasetSchema) }).strict();
 export const datasetLifecycleResultSchema = z.object({ action: z.enum(['deleted', 'archived', 'unarchived']), id: z.uuid() }).strict();
-export const profileSchema = z.object({ sheets: z.array(z.object({ name: z.string(), headers: z.array(z.string()), sample: z.array(z.array(z.string().nullable())).max(5), rows: z.number().int(), suggested: z.array(sourceFieldSchema) }).strict()).max(30) }).strict();
+export const aiColumnConfigSchema = z.object({
+  targetColumn: z.string().regex(/^[a-z][a-z0-9_]*$/).max(63),
+  targetType: z.enum(['string', 'integer', 'decimal', 'boolean']),
+  prompt: z.string().min(5).max(2000),
+  sourceColumns: z.array(z.string().min(1).max(63)).min(1).max(20),
+  batchSize: z.number().int().min(10).max(200).default(100),
+}).strict();
+export type AiColumnConfig = z.infer<typeof aiColumnConfigSchema>;
+
+export const aiColumnPreviewInputSchema = z.object({
+  baseVersionId: z.uuid().optional(),
+  targetColumn: z.string().regex(/^[a-z][a-z0-9_]*$/).max(63),
+  targetType: z.enum(['string', 'integer', 'decimal', 'boolean']),
+  prompt: z.string().min(5).max(2000),
+  sourceColumns: z.array(z.string().min(1).max(63)).min(1).max(20),
+}).strict();
+export type AiColumnPreviewInput = z.infer<typeof aiColumnPreviewInputSchema>;
+
+export const aiColumnPreviewItemSchema = z.object({
+  rowNumber: z.number().int(),
+  inputs: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])),
+  computedValue: z.union([z.string(), z.number(), z.boolean(), z.null()]),
+}).strict();
+export type AiColumnPreviewItem = z.infer<typeof aiColumnPreviewItemSchema>;
+
+export const aiColumnPreviewResultSchema = z.object({
+  targetColumn: z.string(),
+  targetType: z.enum(['string', 'integer', 'decimal', 'boolean']),
+  sampleRows: z.array(aiColumnPreviewItemSchema),
+}).strict();
+export type AiColumnPreviewResult = z.infer<typeof aiColumnPreviewResultSchema>;
+
+export const aiColumnCreateInputSchema = z.object({
+  baseVersionId: z.uuid().optional(),
+  targetColumn: z.string().regex(/^[a-z][a-z0-9_]*$/).max(63),
+  targetType: z.enum(['string', 'integer', 'decimal', 'boolean']),
+  prompt: z.string().min(5).max(2000),
+  sourceColumns: z.array(z.string().min(1).max(63)).min(1).max(20),
+  batchSize: z.number().int().min(10).max(200).default(100),
+}).strict();
+export type AiColumnCreateInput = z.infer<typeof aiColumnCreateInputSchema>;
+
+export const aiColumnCreateResultSchema = z.object({
+  datasetId: z.uuid(),
+  version: z.lazy(() => versionSchema),
+}).strict();
+export type AiColumnCreateResult = z.infer<typeof aiColumnCreateResultSchema>;
+
+export const profileSchema = z.object({
+  sheets: z.array(z.object({ name: z.string(), headers: z.array(z.string()), sample: z.array(z.array(z.string().nullable())).max(5), rows: z.number().int(), suggested: z.array(sourceFieldSchema) }).strict()).max(30),
+  aiColumnConfig: aiColumnConfigSchema.optional(),
+}).strict();
+export type Profile = z.infer<typeof profileSchema>;
 export const issueSchema = z.object({ row: z.number().int(), field: z.string(), code: z.string() }).strict();
 export const issueReportSchema = z.object({ items: z.array(issueSchema).max(11000), complete: z.boolean() }).strict();
 export const versionSchema = z.object({ id: z.uuid(), datasetId: z.uuid(), number: z.number().int(), filename: z.string(), bytes: z.number().int(), regional: regionalSchema, state: z.enum(['uploaded', 'profiling', 'awaiting_mapping', 'validating', 'importing', 'ready', 'failed', 'cancelled']), sha256: z.string().nullable(), profile: profileSchema.nullable(), mapping: mappingSchema.nullable(), rows: z.number().int(), issues: z.array(issueSchema), issueCount: z.number().int(), errorCode: z.string().nullable(), publishedAt: z.string().nullable(), createdAt: z.string(), progress: z.number().int().min(0).max(100), accountId: z.uuid().optional() }).strict();

@@ -119,14 +119,7 @@ export function AppHeader({ session, accountId: propAccountId, onLogout }: AppHe
                 <LayoutDashboard size={14} />
                 <span>Dashboards</span>
               </Link>
-              <Link
-                href={`${basePath}/workforce`}
-                className={`button ${pathname.includes('/workforce') ? 'primary' : ''}`}
-                style={{ height: '32px', fontSize: '13px', padding: '0 10px', gap: '6px' }}
-              >
-                <Users size={14} />
-                <span>Workforce</span>
-              </Link>
+              {/* Workforce module temporarily disabled for replanning */}
               <Link
                 href={`${basePath}/chat`}
                 className={`button ${pathname.includes('/chat') ? 'primary' : ''}`}

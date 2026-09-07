@@ -37,7 +37,7 @@ Incluido y operativo:
 - **Query API Declarativa:** Ejecución con caché LRU acotada (500 entradas) por huella determinista, auto-detección inteligente de columnas temporales, linaje auditable y control estricto de capacidad (`workforce.read`).
 - **Dashboards Gobernados:** Cuadrícula responsive de 12 columnas, widgets interactivos ECharts, alternativas tabulares accesibles conforme a WCAG 2.2 AA, filtros temporales y filtros operacionales de call center (Supervisor, Floor Manager, Wave) con menús desplegables dinámicos. Publicación inmutable para administradores y estado efímero en sesión para no-administradores.
 - **Workforce / Agent Definer y Rosters Semanales:** Catálogos de roles/tipos de empleado, equipos y empleados exclusivos por cuenta (`account_id`). Semanas Operativas Lunes-Domingo (`workforce_weeks`), importador masivo de Rosters Excel con auto-detección multi-hoja, asignaciones/jerarquías con vigencia temporal (`valid_from`/`valid_to`), y versiones inmutables de rosters semanales (`workforce_roster_versions`) con soporte para clonación entre semanas operativas.
-- **AI Chat Multi-Proveedor:** Asistente operacional de solo lectura desacoplado (Google Gemini y Mock Determinista offline), 7 herramientas gobernadas, inyección obligatoria de `tenant_id` y `account_id` desde la sesión, evidencia auditable (`grounding_context`) y límite duro de 5 turnos por interacción.
+- **AI Chat Multi-Proveedor:** Asistente operacional de solo lectura desacoplado (Google Gemini y Mock Determinista offline), herramientas gobernadas, inyección obligatoria de `tenant_id` y `account_id` desde la sesión, evidencia auditable (`grounding_context`) y **límite ampliado de 25 turnos por interacción**.
 
 Fuera del MVP:
 

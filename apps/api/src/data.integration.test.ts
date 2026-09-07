@@ -14,8 +14,8 @@ import {KpiService} from '@atlas/kpi';
 import {roleCapabilities,type DataActor,type DatasetVersion,type Mapping,type Regional} from '@atlas/contracts';
 describe('real ingestion, immutable snapshots and governed KPI queries',()=>{
  const admin=createPool(process.env.ADMIN_DATABASE_URL), data=new IngestionService(), kpis=new KpiService(data);
- const tenant=randomUUID(),otherTenant=randomUUID(),user=randomUUID();
- const actor:DataActor={tenantId:tenant,userId:user,capabilities:[...roleCapabilities.admin]}, other={...actor,tenantId:otherTenant};
+ const tenant=randomUUID(),otherTenant=randomUUID(),user=randomUUID(),accountId=randomUUID(),otherAccountId=randomUUID();
+ const actor:DataActor={tenantId:tenant,accountId,userId:user,capabilities:[...roleCapabilities.admin]}, other={...actor,tenantId:otherTenant,accountId:otherAccountId};
  const regional:Regional={decimalSeparator:',',thousandsSeparator:'.',dateFormat:'DD/MM/YYYY',timezone:'America/Guatemala',delimiter:';'};
  let worker:ReturnType<typeof startImportWorker>, datasetId:string, first:DatasetVersion, kpiId:string;
  const mapping:Mapping={sheet:'CSV',strategy:'replace',regional,keyFields:['id'],fields:[{source:'id',target:'id',type:'string',required:true},{source:'importe',target:'importe',type:'decimal',required:false},{source:'fecha',target:'fecha',type:'date',required:false},{source:'equipo',target:'equipo',type:'string',required:false}]};
@@ -28,6 +28,7 @@ describe('real ingestion, immutable snapshots and governed KPI queries',()=>{
  }
  beforeAll(async()=>{
   await admin.query('INSERT INTO organizations(id,name) VALUES($1,$2),($3,$4)',[tenant,'Ingest Synthetic',otherTenant,'Isolated Synthetic']);
+  await admin.query('INSERT INTO accounts(id,tenant_id,name) VALUES($1,$2,$3),($4,$5,$6)',[accountId,tenant,'Default Account',otherAccountId,otherTenant,'Other Account']);
   await admin.query("INSERT INTO identity.users(id,email,password_hash,mfa_enabled,mfa_secret) VALUES($1,$2,$3,true,'synthetic-unusable-secret')",[user,`${user}@example.invalid`,'unusable-synthetic-hash']);
   await admin.query("INSERT INTO identity.memberships(tenant_id,user_id,role) VALUES($1,$2,'admin')",[tenant,user]);
   await data.onModuleInit();worker=startImportWorker();await worker.waitUntilReady();
@@ -123,4 +124,66 @@ describe('real ingestion, immutable snapshots and governed KPI queries',()=>{
     withTenant(data.pool, tenant, client => client.query('DELETE FROM kpi_versions WHERE id = $1', [kpiId]))
   ).rejects.toMatchObject({ code: '23514' });
  });
+
+ it('previews AI calculated column on sample rows with deterministic output', async () => {
+  const preview = await data.previewAiColumn(actor, datasetId, {
+    baseVersionId: first.id,
+    targetColumn: 'sentimiento',
+    targetType: 'string',
+    prompt: 'Determina el sentimiento del equipo.',
+    sourceColumns: ['equipo'],
+  });
+
+  expect(preview.targetColumn).toBe('sentimiento');
+  expect(preview.targetType).toBe('string');
+  expect(preview.sampleRows.length).toBeGreaterThan(0);
+  expect(preview.sampleRows[0]?.computedValue).toBeDefined();
+
+  // Cross-tenant negative test
+  await expect(
+    data.previewAiColumn(other, datasetId, {
+      baseVersionId: first.id,
+      targetColumn: 'sentimiento',
+      targetType: 'string',
+      prompt: 'Determina el sentimiento.',
+      sourceColumns: ['equipo'],
+    })
+  ).rejects.toMatchObject({ code: 'DATASET_NOT_FOUND' });
+ });
+
+ it('creates an immutable v{N+1} with an AI-enriched column and processes in background', async () => {
+  const created = await data.createAiColumnVersion(
+    actor,
+    datasetId,
+    {
+      baseVersionId: first.id,
+      targetColumn: 'clasificacion_ai',
+      targetType: 'string',
+      prompt: 'Clasifica el registro según el equipo.',
+      sourceColumns: ['equipo'],
+      batchSize: 50,
+    },
+    randomUUID(),
+    randomUUID()
+  );
+
+  expect(created.version.number).toBeGreaterThan(first.number);
+  expect(created.version.state).toBe('importing');
+
+  // Wait for worker to complete the AI column batch processing
+  const readyVer = await wait(created.version.id, ['ready', 'failed']);
+  expect(readyVer.state).toBe('ready');
+  expect(readyVer.rows).toBe(first.rows);
+
+  // Verify preview contains the newly calculated AI column
+  const preview = await data.preview(actor, readyVer.id);
+  expect(preview.rows.length).toBe(first.rows);
+  expect(preview.rows[0]?.['clasificacion_ai']).toBeDefined();
+
+  // Verify base version immutability: base version preview still has only original fields
+  const basePreview = await data.preview(actor, first.id);
+  expect(basePreview.rows[0]?.['clasificacion_ai']).toBeUndefined();
+  expect(basePreview.rows[0]?.['equipo']).toBe('A');
+ });
 });
+

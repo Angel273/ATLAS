@@ -21,12 +21,15 @@ import {
   fieldTypeSchema,
   issueReportSchema,
   errorPolicySchema,
+  aiColumnPreviewResultSchema,
+  aiColumnCreateResultSchema,
   type Session,
   type DatasetVersion,
   type Regional,
   type Mapping,
   type FieldType,
   type ErrorPolicy,
+  type AiColumnPreviewResult,
 } from '@atlas/contracts';
 import { api } from '../../../lib/api';
 import { Brand } from '../../../components/workspace';
@@ -100,6 +103,70 @@ interface ColumnConfig {
   sample: string | null;
 }
 
+interface AiTemplate {
+  id: string;
+  name: string;
+  icon: string;
+  targetColumn: string;
+  targetType: 'string' | 'integer' | 'decimal' | 'boolean';
+  prompt: string;
+  description: string;
+}
+
+const AI_TEMPLATES: AiTemplate[] = [
+  {
+    id: 'sentiment',
+    name: 'Sentimiento',
+    icon: '💬',
+    targetColumn: 'sentimiento_cliente',
+    targetType: 'string',
+    prompt: 'Determina el sentimiento del cliente: Positivo, Neutro o Negativo.',
+    description: 'Clasifica el tono del contacto.',
+  },
+  {
+    id: 'category',
+    name: 'Categoría / Motivo',
+    icon: '🏷️',
+    targetColumn: 'categoria_contacto',
+    targetType: 'string',
+    prompt: 'Clasifica el motivo de contacto o consulta en una frase concisa (máximo 4 palabras).',
+    description: 'Agrupa llamadas por temática.',
+  },
+  {
+    id: 'urgency',
+    name: 'Nivel de Urgencia',
+    icon: '⚡',
+    targetColumn: 'nivel_urgencia',
+    targetType: 'integer',
+    prompt: 'Evalúa la urgencia o severidad del caso del 1 (baja) al 5 (crítica) como un número entero.',
+    description: 'Puntaje numérico del 1 al 5.',
+  },
+  {
+    id: 'dissatisfaction',
+    name: 'Cliente Insatisfecho',
+    icon: '⚠️',
+    targetColumn: 'cliente_insatisfecho',
+    targetType: 'boolean',
+    prompt: 'Responde true si el cliente expresó insatisfacción o reclamo grave, o false en caso de interacción cordial o resuelta.',
+    description: 'Bandera booleana (true/false).',
+  },
+];
+
+function extractColumnsFromVersion(v: DatasetVersion | null): string[] {
+  if (!v) return [];
+  if (v.mapping?.fields && v.mapping.fields.length > 0) {
+    return v.mapping.fields.map(f => f.target);
+  }
+  const sheet = v.profile?.sheets?.[0];
+  if (sheet?.suggested && sheet.suggested.length > 0) {
+    return sheet.suggested.map(s => s.target);
+  }
+  if (sheet?.headers && sheet.headers.length > 0) {
+    return sheet.headers;
+  }
+  return [];
+}
+
 /**
  * Componente principal de la interfaz de Datasets y gestión de ciclo de vida de versiones.
  */
@@ -130,12 +197,158 @@ export default function DatasetsPage() {
   const [showArchived, setShowArchived] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
 
+  // AI Column Modal states
+  const [showAiModal, setShowAiModal] = useState(false);
+  const [aiBaseVersionId, setAiBaseVersionId] = useState('');
+  const [aiTargetColumn, setAiTargetColumn] = useState('sentimiento_cliente');
+  const [aiTargetType, setAiTargetType] = useState<'string' | 'integer' | 'decimal' | 'boolean'>('string');
+  const [aiPrompt, setAiPrompt] = useState('Determina el sentimiento del cliente: Positivo, Neutro o Negativo.');
+  const [aiSourceCols, setAiSourceCols] = useState<string[]>([]);
+  const [aiBatchSize, setAiBatchSize] = useState<number>(100);
+  const [aiPreviewBusy, setAiPreviewBusy] = useState(false);
+  const [aiPreviewError, setAiPreviewError] = useState('');
+  const [aiPreviewResult, setAiPreviewResult] = useState<AiColumnPreviewResult | null>(null);
+  const [aiCreateBusy, setAiCreateBusy] = useState(false);
+
   const manage = session?.capabilities.includes('dataset.manage');
   const activeDataset = useMemo(() => datasets.find(d => d.id === selected) ?? null, [datasets, selected]);
 
   const hasPublishedVersions = useMemo(() => {
     return Boolean(activeDataset?.currentVersionId || versions.some(v => Boolean(v.publishedAt)));
   }, [activeDataset, versions]);
+
+  const eligibleVersions = useMemo(() => {
+    return versions.filter(v => Boolean(v.publishedAt) || v.state === 'ready');
+  }, [versions]);
+
+  const selectedBaseVersion = useMemo(() => {
+    return versions.find(v => v.id === aiBaseVersionId)
+      ?? (version && (version.publishedAt || version.state === 'ready') ? version : null)
+      ?? eligibleVersions[0]
+      ?? null;
+  }, [versions, aiBaseVersionId, version, eligibleVersions]);
+
+  const availableAiSourceColumns = useMemo(() => {
+    return extractColumnsFromVersion(selectedBaseVersion);
+  }, [selectedBaseVersion]);
+
+  function openAiModal(targetVer?: DatasetVersion) {
+    const base = targetVer
+      ?? (version && (version.publishedAt || version.state === 'ready') ? version : null)
+      ?? eligibleVersions[0]
+      ?? null;
+    if (!base) {
+      setError('Se requiere al menos una versión validada o publicada para generar una columna con IA.');
+      return;
+    }
+    setAiBaseVersionId(base.id);
+    const cols = extractColumnsFromVersion(base);
+    setAiSourceCols(cols.length > 0 ? cols.slice(0, Math.min(3, cols.length)) : []);
+    setAiTargetColumn('sentimiento_cliente');
+    setAiTargetType('string');
+    setAiPrompt('Determina el sentimiento del cliente: Positivo, Neutro o Negativo.');
+    setAiBatchSize(100);
+    setAiPreviewResult(null);
+    setAiPreviewError('');
+    setShowAiModal(true);
+  }
+
+  function applyAiTemplate(tpl: AiTemplate) {
+    setAiTargetColumn(tpl.targetColumn);
+    setAiTargetType(tpl.targetType);
+    setAiPrompt(tpl.prompt);
+    setAiPreviewResult(null);
+    setAiPreviewError('');
+  }
+
+  function toggleAiSourceCol(col: string) {
+    setAiSourceCols(prev =>
+      prev.includes(col) ? prev.filter(c => c !== col) : [...prev, col]
+    );
+    setAiPreviewResult(null);
+  }
+
+  async function handleAiPreview() {
+    if (!activeDataset) return;
+    if (!aiTargetColumn.trim() || !/^[a-z][a-z0-9_]*$/.test(aiTargetColumn.trim())) {
+      setAiPreviewError('El nombre de la columna debe empezar con letra minúscula y contener solo letras minúsculas, números o guiones bajos.');
+      return;
+    }
+    if (aiPrompt.trim().length < 5) {
+      setAiPreviewError('El prompt para la IA debe tener al menos 5 caracteres.');
+      return;
+    }
+    if (aiSourceCols.length === 0) {
+      setAiPreviewError('Debes seleccionar al menos una columna de contexto para la IA.');
+      return;
+    }
+
+    setAiPreviewBusy(true);
+    setAiPreviewError('');
+    try {
+      const res = await api(`/datasets/${activeDataset.id}/ai-column/preview`, aiColumnPreviewResultSchema, {
+        method: 'POST',
+        body: JSON.stringify({
+          baseVersionId: aiBaseVersionId || undefined,
+          targetColumn: aiTargetColumn.trim(),
+          targetType: aiTargetType,
+          prompt: aiPrompt.trim(),
+          sourceColumns: aiSourceCols,
+        }),
+      });
+      setAiPreviewResult(res);
+    } catch (e) {
+      setAiPreviewError(e instanceof Error ? e.message : 'Error al previsualizar la columna con IA.');
+    } finally {
+      setAiPreviewBusy(false);
+    }
+  }
+
+  async function handleAiGenerate() {
+    if (!activeDataset) return;
+    if (!aiTargetColumn.trim() || !/^[a-z][a-z0-9_]*$/.test(aiTargetColumn.trim())) {
+      setAiPreviewError('El nombre de la columna debe empezar con letra minúscula y contener solo letras minúsculas, números o guiones bajos.');
+      return;
+    }
+    if (aiPrompt.trim().length < 5) {
+      setAiPreviewError('El prompt para la IA debe tener al menos 5 caracteres.');
+      return;
+    }
+    if (aiSourceCols.length === 0) {
+      setAiPreviewError('Debes seleccionar al menos una columna de contexto para la IA.');
+      return;
+    }
+
+    setAiCreateBusy(true);
+    setError('');
+    try {
+      const res = await api(`/datasets/${activeDataset.id}/ai-column`, aiColumnCreateResultSchema, {
+        method: 'POST',
+        headers: { 'Idempotency-Key': crypto.randomUUID() },
+        body: JSON.stringify({
+          baseVersionId: aiBaseVersionId || undefined,
+          targetColumn: aiTargetColumn.trim(),
+          targetType: aiTargetType,
+          prompt: aiPrompt.trim(),
+          sourceColumns: aiSourceCols,
+          batchSize: aiBatchSize,
+        }),
+      });
+      setShowAiModal(false);
+      setNotice(`Generando versión v${res.version.number} con columna IA '${aiTargetColumn.trim()}'. El worker está enriqueciendo los registros en segundo plano.`);
+      await refresh();
+      const freshVersions = await api(`/datasets/${activeDataset.id}/versions`, versionListSchema);
+      setVersions(freshVersions.items);
+      const created = freshVersions.items.find(v => v.id === res.version.id);
+      if (created) {
+        setVersion(created);
+      }
+    } catch (e) {
+      setAiPreviewError(e instanceof Error ? e.message : 'Error al solicitar generación de columna con IA.');
+    } finally {
+      setAiCreateBusy(false);
+    }
+  }
 
   async function refresh(includeArch = showArchived) {
     const result = await api(`/datasets?includeArchived=${includeArch}`, datasetListSchema);
@@ -208,10 +421,12 @@ export default function DatasetsPage() {
   useEffect(() => {
     if (!version || !['profiling', 'validating', 'importing'].includes(version.state)) return;
     let active = true;
+    let consecutiveFailures = 0;
     const timer = setInterval(() => {
       void api(`/uploads/${version.id}`, versionSchema)
         .then(result => {
           if (active) {
+            consecutiveFailures = 0;
             setVersion(result);
             if (result.state === 'awaiting_mapping' && result.profile) {
               setupColumnsFromProfile(result, result.profile.sheets[0]?.name ?? '');
@@ -219,7 +434,10 @@ export default function DatasetsPage() {
           }
         })
         .catch(e => {
-          if (active) setError(String(e));
+          consecutiveFailures++;
+          if (active && consecutiveFailures >= 3) {
+            setError(e instanceof Error ? e.message : String(e));
+          }
         });
     }, 1500);
     return () => {
@@ -573,16 +791,31 @@ export default function DatasetsPage() {
                         Reactivar dataset
                       </button>
                     ) : (
-                      <button
-                        type="button"
-                        className="button"
-                        disabled={busy}
-                        onClick={() => setShowDeleteModal(true)}
-                        style={{ fontSize: '13px', color: '#b91c1c', borderColor: '#fca5a5' }}
-                        title={hasPublishedVersions ? 'Archivar dataset gobernado' : 'Eliminar dataset borrador'}
-                      >
-                        {hasPublishedVersions ? 'Archivar dataset' : 'Eliminar dataset'}
-                      </button>
+                      <>
+                        {hasPublishedVersions && (
+                          <button
+                            type="button"
+                            className="button"
+                            disabled={busy}
+                            onClick={() => openAiModal()}
+                            style={{ fontSize: '13px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                            title="Crear una nueva versión con columna calculada por IA"
+                          >
+                            <span>✨</span>
+                            <span>Columna con IA</span>
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="button"
+                          disabled={busy}
+                          onClick={() => setShowDeleteModal(true)}
+                          style={{ fontSize: '13px', color: '#b91c1c', borderColor: '#fca5a5' }}
+                          title={hasPublishedVersions ? 'Archivar dataset gobernado' : 'Eliminar dataset borrador'}
+                        >
+                          {hasPublishedVersions ? 'Archivar dataset' : 'Eliminar dataset'}
+                        </button>
+                      </>
                     )}
                   </div>
                 )}
@@ -625,6 +858,365 @@ export default function DatasetsPage() {
                   onClick={() => { void handleDeleteOrArchive(); }}
                 >
                   {busy ? 'Procesando...' : hasPublishedVersions ? 'Confirmar y archivar' : 'Confirmar y eliminar'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Diálogo Columna Asistida con IA */}
+        {showAiModal && activeDataset && (
+          <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '16px' }}>
+            <div className="panel" style={{ background: 'var(--surface, #ffffff)', padding: '24px', borderRadius: '8px', maxWidth: '780px', width: '100%', maxHeight: '90vh', overflowY: 'auto', border: '1px solid var(--border-strong)', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.2)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span>✨</span>
+                    <span>Agregar Columna Asistida con IA</span>
+                  </h3>
+                  <p style={{ margin: '4px 0 0 0', color: 'var(--secondary)', fontSize: '13px' }}>
+                    Genera una nueva versión inmutable con datos enriquecidos mediante inferencia semántica por lotes.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="button"
+                  onClick={() => setShowAiModal(false)}
+                  style={{ padding: '4px 10px', fontSize: '14px', lineHeight: 1 }}
+                  title="Cerrar modal"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Selector de versión base */}
+              <div style={{ marginBottom: '16px', background: 'var(--surface-muted)', padding: '12px', borderRadius: '6px', border: '1px solid var(--border)' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '6px', color: 'var(--secondary)' }}>
+                  VERSIÓN BASE ORIGEN (INMUTABLE)
+                </label>
+                {eligibleVersions.length > 0 ? (
+                  <select
+                    value={aiBaseVersionId}
+                    onChange={e => {
+                      const newId = e.target.value;
+                      setAiBaseVersionId(newId);
+                      const b = versions.find(v => v.id === newId);
+                      if (b) {
+                        const cols = extractColumnsFromVersion(b);
+                        setAiSourceCols(cols.slice(0, Math.min(3, cols.length)));
+                        setAiPreviewResult(null);
+                      }
+                    }}
+                    style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--surface)', fontSize: '13px' }}
+                  >
+                    {eligibleVersions.map(v => (
+                      <option key={v.id} value={v.id}>
+                        v{v.number} — {v.filename} ({v.rows.toLocaleString()} filas {v.publishedAt ? '· Publicada' : '· Lista'})
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <p style={{ margin: 0, color: 'var(--negative)', fontSize: '13px' }}>
+                    No hay versiones listas o publicadas para este dataset.
+                  </p>
+                )}
+              </div>
+
+              {/* Plantillas rápidas de Call Center */}
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '8px', color: 'var(--secondary)' }}>
+                  PLANTILLAS RÁPIDAS (CALL CENTER / OPERACIONAL)
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '8px' }}>
+                  {AI_TEMPLATES.map(tpl => (
+                    <button
+                      key={tpl.id}
+                      type="button"
+                      onClick={() => applyAiTemplate(tpl)}
+                      style={{
+                        padding: '8px 10px',
+                        textAlign: 'left',
+                        border: '1px solid var(--border)',
+                        borderRadius: '6px',
+                        background: aiTargetColumn === tpl.targetColumn ? 'var(--surface-muted)' : 'var(--surface)',
+                        cursor: 'pointer',
+                        borderColor: aiTargetColumn === tpl.targetColumn ? 'var(--accent)' : 'var(--border)',
+                        transition: 'all 0.15s ease',
+                      }}
+                    >
+                      <div style={{ fontWeight: 600, fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span>{tpl.icon}</span>
+                        <span>{tpl.name}</span>
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--secondary)', marginTop: '2px' }}>
+                        {tpl.description}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Campos: Columna destino y Tipo */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '6px' }}>
+                    Nombre de la Columna Destino *
+                  </label>
+                  <input
+                    type="text"
+                    value={aiTargetColumn}
+                    onChange={e => {
+                      setAiTargetColumn(e.target.value);
+                      setAiPreviewResult(null);
+                    }}
+                    placeholder="ej. sentimiento_cliente"
+                    style={{ width: '100%', padding: '8px 10px', borderRadius: '4px', border: '1px solid var(--border)', fontSize: '13px' }}
+                  />
+                  <span style={{ fontSize: '11px', color: 'var(--secondary)', marginTop: '4px', display: 'block' }}>
+                    Minúsculas, números y guiones bajos (ej. <code>motivo_resumido</code>).
+                  </span>
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '6px' }}>
+                    Tipo de Dato Resultado *
+                  </label>
+                  <select
+                    value={aiTargetType}
+                    onChange={e => {
+                      setAiTargetType(e.target.value as 'string' | 'integer' | 'decimal' | 'boolean');
+                      setAiPreviewResult(null);
+                    }}
+                    style={{ width: '100%', padding: '8px 10px', borderRadius: '4px', border: '1px solid var(--border)', fontSize: '13px', background: 'var(--surface)' }}
+                  >
+                    <option value="string">Texto / Categoría (string)</option>
+                    <option value="integer">Número Entero (integer, ej. 1 a 5)</option>
+                    <option value="decimal">Decimal / Ratio (decimal)</option>
+                    <option value="boolean">Booleano Verdadero/Falso (boolean)</option>
+                  </select>
+                  <span style={{ fontSize: '11px', color: 'var(--secondary)', marginTop: '4px', display: 'block' }}>
+                    Estructura tipada que validará el motor de IA.
+                  </span>
+                </div>
+              </div>
+
+              {/* Columnas de contexto (Checkbox list) */}
+              <div style={{ marginBottom: '16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                  <label style={{ fontSize: '12px', fontWeight: 600 }}>
+                    Columnas de Contexto a enviar a la IA ({aiSourceCols.length} seleccionadas) *
+                  </label>
+                  {availableAiSourceColumns.length > 0 && (
+                    <button
+                      type="button"
+                      className="button"
+                      onClick={() => {
+                        if (aiSourceCols.length === availableAiSourceColumns.length) {
+                          setAiSourceCols([]);
+                        } else {
+                          setAiSourceCols([...availableAiSourceColumns]);
+                        }
+                        setAiPreviewResult(null);
+                      }}
+                      style={{ fontSize: '11px', padding: '2px 8px' }}
+                    >
+                      {aiSourceCols.length === availableAiSourceColumns.length ? 'Deseleccionar todas' : 'Seleccionar todas'}
+                    </button>
+                  )}
+                </div>
+                {availableAiSourceColumns.length > 0 ? (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', maxHeight: '120px', overflowY: 'auto', padding: '8px', background: 'var(--surface-muted)', borderRadius: '6px', border: '1px solid var(--border)' }}>
+                    {availableAiSourceColumns.map((col: string) => {
+                      const checked = aiSourceCols.includes(col);
+                      return (
+                        <label
+                          key={col}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            padding: '4px 10px',
+                            borderRadius: '4px',
+                            background: checked ? 'var(--accent)' : 'var(--surface)',
+                            color: checked ? '#fff' : 'inherit',
+                            fontSize: '12px',
+                            cursor: 'pointer',
+                            userSelect: 'none',
+                            border: '1px solid var(--border)',
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleAiSourceCol(col)}
+                            style={{ display: 'none' }}
+                          />
+                          <span>{checked ? '✓' : '+'}</span>
+                          <span style={{ fontFamily: 'monospace' }}>{col}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p style={{ margin: 0, fontSize: '12px', color: 'var(--secondary)' }}>
+                    No se encontraron columnas en la versión seleccionada.
+                  </p>
+                )}
+                <span style={{ fontSize: '11px', color: 'var(--secondary)', marginTop: '4px', display: 'block' }}>
+                  Solo los valores de las columnas seleccionadas serán procesados para optimizar tokens y privacidad.
+                </span>
+              </div>
+
+              {/* Prompt / Instrucción */}
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '6px' }}>
+                  Instrucción / Prompt para el Modelo de IA *
+                </label>
+                <textarea
+                  rows={3}
+                  value={aiPrompt}
+                  onChange={e => {
+                    setAiPrompt(e.target.value);
+                    setAiPreviewResult(null);
+                  }}
+                  placeholder="Explica qué inferir o calcular (ej. Determina si el cliente expresó molestia en una escala del 1 al 5...)"
+                  style={{ width: '100%', padding: '8px 10px', borderRadius: '4px', border: '1px solid var(--border)', fontSize: '13px', resize: 'vertical' }}
+                />
+                <span style={{ fontSize: '11px', color: 'var(--secondary)', marginTop: '4px', display: 'block' }}>
+                  El motor aplicará esta regla fila por fila en lotes de procesamiento con salida JSON estructurada y segura.
+                </span>
+              </div>
+
+              {/* Configuración de Batch Size y Motor */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px', alignItems: 'center' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '6px' }}>
+                    Tamaño de Lote (Batching)
+                  </label>
+                  <select
+                    value={aiBatchSize}
+                    onChange={e => setAiBatchSize(Number(e.target.value))}
+                    style={{ width: '100%', padding: '8px 10px', borderRadius: '4px', border: '1px solid var(--border)', fontSize: '13px', background: 'var(--surface)' }}
+                  >
+                    <option value={50}>50 filas por llamada (conservador)</option>
+                    <option value={100}>100 filas por llamada (Recomendado)</option>
+                    <option value={150}>150 filas por llamada (alta velocidad)</option>
+                  </select>
+                </div>
+                <div style={{ padding: '10px 14px', background: 'var(--surface-muted)', borderRadius: '6px', border: '1px solid var(--border)', fontSize: '12px' }}>
+                  <span style={{ fontWeight: 600, display: 'block', marginBottom: '2px' }}>Motor Semántico</span>
+                  <span style={{ color: 'var(--secondary)' }}>Google Gemini 2.5 Flash / Modo Offline Determinista</span>
+                </div>
+              </div>
+
+              {/* Errores de previsualización */}
+              {aiPreviewError && (
+                <div style={{ padding: '10px 14px', background: '#fef2f2', border: '1px solid #f87171', borderRadius: '6px', color: '#b91c1c', fontSize: '13px', marginBottom: '16px' }}>
+                  {aiPreviewError}
+                </div>
+              )}
+
+              {/* Sección de Previsualización (3 filas) */}
+              <div style={{ marginBottom: '20px', border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: 'var(--surface-muted)', borderBottom: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span>🧪</span>
+                    <span>Previsualización en tiempo real (3 filas de muestra)</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="button"
+                    disabled={aiPreviewBusy || aiCreateBusy || aiSourceCols.length === 0}
+                    onClick={() => { void handleAiPreview(); }}
+                    style={{ fontSize: '12px', padding: '4px 12px' }}
+                  >
+                    {aiPreviewBusy ? 'Evaluando con IA...' : '🧪 Previsualizar con IA'}
+                  </button>
+                </div>
+
+                <div style={{ padding: '12px' }}>
+                  {aiPreviewBusy ? (
+                    <div style={{ textAlign: 'center', padding: '24px 12px', color: 'var(--secondary)', fontSize: '13px' }}>
+                      <p style={{ margin: 0 }}>Consultando motor de IA con las 3 primeras filas...</p>
+                    </div>
+                  ) : aiPreviewResult ? (
+                    <div className="table-wrapper" style={{ margin: 0 }}>
+                      <table style={{ fontSize: '12px', width: '100%' }}>
+                        <thead>
+                          <tr>
+                            <th style={{ width: '60px' }}>Fila #</th>
+                            <th>Entradas analizadas ({aiSourceCols.join(', ')})</th>
+                            <th style={{ width: '200px' }}>
+                              Columna IA: <code>{aiPreviewResult.targetColumn}</code>
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {aiPreviewResult.sampleRows.map(sample => (
+                            <tr key={sample.rowNumber}>
+                              <td><strong>#{sample.rowNumber}</strong></td>
+                              <td>
+                                <div style={{ maxHeight: '60px', overflowY: 'auto', fontSize: '11px', lineHeight: 1.4 }}>
+                                  {Object.entries(sample.inputs).map(([k, v]) => (
+                                    <div key={k}>
+                                      <span style={{ color: 'var(--secondary)' }}>{k}:</span> <code>{String(v ?? 'null')}</code>
+                                    </div>
+                                  ))}
+                                </div>
+                              </td>
+                              <td style={{ verticalAlign: 'middle' }}>
+                                <span style={{
+                                  display: 'inline-block',
+                                  padding: '4px 8px',
+                                  borderRadius: '4px',
+                                  background: sample.computedValue !== null ? 'var(--surface-muted)' : '#fef2f2',
+                                  fontWeight: 600,
+                                  color: sample.computedValue !== null ? 'var(--accent)' : 'var(--negative)',
+                                  border: '1px solid var(--border)',
+                                }}>
+                                  {sample.computedValue !== null ? String(sample.computedValue) : 'null'}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p style={{ margin: 0, fontSize: '12px', color: 'var(--secondary)', textAlign: 'center', padding: '12px' }}>
+                      Presiona <strong>&quot;Previsualizar con IA&quot;</strong> para probar el prompt y verificar el tipo de dato inferido antes de enriquecer todas las filas.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Botones de acción del Modal */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', borderTop: '1px solid var(--border)', paddingTop: '16px' }}>
+                <button
+                  type="button"
+                  className="button"
+                  disabled={aiCreateBusy}
+                  onClick={() => setShowAiModal(false)}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  className="button primary"
+                  disabled={aiCreateBusy || aiPreviewBusy || aiSourceCols.length === 0}
+                  onClick={() => { void handleAiGenerate(); }}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}
+                >
+                  {aiCreateBusy ? (
+                    <>
+                      <span>⏳</span>
+                      <span>Creando versión...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>✨</span>
+                      <span>Generar versión con columna IA</span>
+                    </>
+                  )}
                 </button>
               </div>
             </div>
@@ -755,6 +1347,17 @@ export default function DatasetsPage() {
                               >
                                 Revisar v{item.number}
                               </button>
+                              {manage && (item.publishedAt || item.state === 'ready') && (
+                                <button
+                                  className="button"
+                                  disabled={busy}
+                                  onClick={() => openAiModal(item)}
+                                  title={`Crear columna con IA basada en v${item.number}`}
+                                  style={{ padding: '6px 10px', fontSize: '12px' }}
+                                >
+                                  ✨ IA
+                                </button>
+                              )}
                               {manage && item.state === 'ready' && !item.publishedAt && (
                                 <button
                                   className="button primary"
@@ -819,9 +1422,31 @@ export default function DatasetsPage() {
 
             {/* Mensaje de procesamiento activo */}
             {['profiling', 'validating', 'importing'].includes(version.state) && (
-              <div style={{ padding: '16px', background: 'var(--surface)', borderLeft: '4px solid var(--warning)', margin: '16px 0' }}>
-                <p><strong>Procesamiento en segundo plano en curso ({version.progress}%):</strong> {states[version.state]}</p>
-                <p className="secondary" style={{ marginTop: '4px' }}>El worker está analizando tu archivo. Puedes continuar navegando; el progreso se actualizará automáticamente.</p>
+              <div style={{ padding: '16px', background: 'var(--surface)', borderLeft: '4px solid var(--accent)', margin: '16px 0', borderRadius: '4px' }}>
+                {version.profile?.aiColumnConfig ? (
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                      <p style={{ margin: 0, fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span>✨</span>
+                        <span>Generando columna con IA: <code>{version.profile.aiColumnConfig.targetColumn}</code> ({version.progress}%)</span>
+                      </p>
+                      <span style={{ fontSize: '12px', color: 'var(--secondary)' }}>
+                        {version.rows.toLocaleString()} filas enriquecidas
+                      </span>
+                    </div>
+                    <div style={{ width: '100%', height: '8px', background: 'var(--surface-muted)', borderRadius: '4px', overflow: 'hidden' }}>
+                      <div style={{ width: `${Math.max(2, version.progress)}%`, height: '100%', background: 'var(--accent)', transition: 'width 0.3s ease' }} />
+                    </div>
+                    <p className="secondary" style={{ marginTop: '8px', fontSize: '12px' }}>
+                      El worker está enriqueciendo los registros con IA en segundo plano. Puedes continuar navegando; la vista se actualizará automáticamente al completar.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p><strong>Procesamiento en segundo plano en curso ({version.progress}%):</strong> {states[version.state]}</p>
+                    <p className="secondary" style={{ marginTop: '4px' }}>El worker está analizando tu archivo. Puedes continuar navegando; el progreso se actualizará automáticamente.</p>
+                  </>
+                )}
               </div>
             )}
 
@@ -1206,6 +1831,19 @@ export default function DatasetsPage() {
                   }}
                 >
                   Ver valores normalizados
+                </button>
+              )}
+              {manage && (version.publishedAt || version.state === 'ready') && (
+                <button
+                  type="button"
+                  className="button"
+                  disabled={busy}
+                  onClick={() => openAiModal(version)}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                  title={`Crear una nueva versión con columna de IA a partir de v${version.number}`}
+                >
+                  <span>✨</span>
+                  <span>Columna con IA</span>
                 </button>
               )}
               {manage && version.state === 'ready' && !version.publishedAt && (

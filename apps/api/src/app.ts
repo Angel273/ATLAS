@@ -237,6 +237,13 @@ class DatasetsController {
   @Post(':id/unarchive') async unarchive(@Req() request: Request, @Param('id') id: string, @Res({passthrough:true}) response: Response) {
     return this.service.unarchive(await this.auth.authenticate(token(request)), id, String(response.locals.correlationId));
   }
+  @Post(':id/ai-column/preview') async aiColumnPreview(@Req() request: Request, @Param('id') id: string, @Body() body: unknown) {
+    return this.service.previewAiColumn(await this.auth.authenticate(token(request)), id, body);
+  }
+  @Post(':id/ai-column') async aiColumnCreate(@Req() request: Request, @Param('id') id: string, @Body() body: unknown, @Headers('idempotency-key') key: string | undefined, @Res({passthrough:true}) response: Response) {
+    const finalKey = key || (request.headers['idempotency-key'] as string) || crypto.randomUUID();
+    return this.service.createAiColumnVersion(await this.auth.authenticate(token(request)), id, body, finalKey, String(response.locals.correlationId));
+  }
 }
 @Controller('uploads')
 class UploadsController {

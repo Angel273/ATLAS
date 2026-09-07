@@ -174,13 +174,13 @@ export class ConversationsService {
         content: r.content,
       }));
 
-      // 3. Tool execution loop (max 5 turns)
+      // 3. Tool execution loop (max 25 turns)
       const provider = getAIProvider();
       const accumulatedCitations: GroundingCitation[] = [];
       let totalTokens = 0;
       let finalContent = '';
       let iterations = 0;
-      const maxTurns = 5;
+      const maxTurns = 25;
 
       while (iterations < maxTurns) {
         iterations++;
@@ -234,7 +234,7 @@ export class ConversationsService {
       }
 
       if (!finalContent) {
-        finalContent = 'Se ha alcanzado el límite máximo de consultas de herramientas permitidas para este turno. Por favor, especifica una consulta más acotada.';
+        finalContent = 'Se ha alcanzado el límite máximo de consultas de herramientas permitidas para este turno (25 turnos). Por favor, especifica una consulta más acotada.';
       }
 
       // Deduplicate citations

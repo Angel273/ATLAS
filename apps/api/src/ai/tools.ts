@@ -36,6 +36,9 @@ export interface ToolServices {
   dashboards: DashboardsService;
 }
 
+/** Flag para pausar/activar herramientas del módulo Workforce según requerimientos operacionales */
+export const WORKFORCE_MODULE_ENABLED = false;
+
 export const TOOL_DEFINITIONS: ToolDefinition[] = [
 
   {
@@ -133,19 +136,24 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       required: ['kpiVersionId'],
     },
   },
-  {
-    name: 'get_employee_structure',
-    description: 'Consulta la estructura de workforce de la organización: equipos operativos, tipos de rol y conteo o lista de agentes.',
-    parameters: {
-      type: 'object',
-      properties: {
-        teamId: {
-          type: 'string',
-          description: 'Filtrar opcionalmente por UUID de equipo.',
+  ...(WORKFORCE_MODULE_ENABLED
+    ? [
+        {
+          name: 'get_employee_structure',
+          description:
+            'Consulta la estructura de workforce de la organización: equipos operativos, tipos de rol y conteo o lista de agentes.',
+          parameters: {
+            type: 'object' as const,
+            properties: {
+              teamId: {
+                type: 'string',
+                description: 'Filtrar opcionalmente por UUID de equipo.',
+              },
+            },
+          },
         },
-      },
-    },
-  },
+      ]
+    : []),
   {
     name: 'get_published_dashboard',
     description: 'Consulta un dashboard publicado y las definiciones de los widgets que contiene.',
@@ -341,6 +349,18 @@ export async function executeTool(
       }
 
       case 'get_employee_structure': {
+        if (!WORKFORCE_MODULE_ENABLED) {
+          result = {
+            status: 'disabled',
+            message: 'El módulo de Workforce se encuentra temporalmente desactivado para replanteamiento.',
+          };
+          citations.push({
+            title: 'Estructura de Workforce (temporalmente desactivada)',
+            factType: 'structure',
+          });
+          break;
+        }
+
         const teams = await services.workforce.listTeams(actor);
         const employees = await services.workforce.listEmployees(actor);
         const teamFilter = typeof rawArgs.teamId === 'string' ? rawArgs.teamId : undefined;

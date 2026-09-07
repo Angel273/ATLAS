@@ -15,15 +15,166 @@ import { join, resolve } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { z } from 'zod';
-import { createPool, withTenant, withIdentity } from '@atlas/database';
+import { createPool, withTenant, withIdentity, type Pool } from '@atlas/database';
 import { mappingSchema, profileSchema, regionalSchema, MAX_UPLOAD_BYTES, type Mapping, type FieldType } from '@atlas/contracts';
 import { ObjectStorage } from './storage.js';
 import { normalize, targetName, type Cell, type Value } from './normalize.js';
 import { readRows } from './readers.js';
 import { verifyTask, type ImportTask } from './queue.js';
+import { generateAiBatchValues } from './ai-column.js';
 
 const internalSchema = z.object({ object_key: z.string(), object_version: z.string(), bytes: z.coerce.number(), format: z.enum(['csv','xlsx']), regional: regionalSchema, sha256: z.string().nullable(), mapping: mappingSchema.nullable(), base_version_id: z.uuid().nullable(), state: z.string(), published_at: z.date().nullable() });
 const terminal = ['ready', 'cancelled'];
+
+/**
+ * Procesa la generación de una columna calculada por IA en segundo plano por lotes.
+ */
+async function processAiColumn(task: ImportTask, pool: Pool, auth: Pool) {
+  const authorize = async () => {
+    const valid = await withIdentity(auth, task.actorId, client =>
+      client.query(
+        `SELECT 1 FROM identity.memberships m JOIN identity.users u ON u.id=m.user_id WHERE m.user_id=$1 AND m.tenant_id=$2 AND m.role='admin' AND NOT u.disabled AND u.mfa_enabled`,
+        [task.actorId, task.tenantId]
+      )
+    );
+    if (!valid.rowCount) throw new Error('JOB_PERMISSION_REVOKED');
+  };
+
+  await authorize();
+
+  const record = await withTenant(pool, task.tenantId, async client => {
+    const result = await client.query<{
+      base_version_id: string | null;
+      profile: unknown;
+      mapping: unknown;
+      state: string;
+      published_at: Date | null;
+    }>(
+      'SELECT base_version_id, profile, mapping, state, published_at FROM dataset_versions WHERE id=$1',
+      [task.versionId]
+    );
+    return result.rows[0];
+  });
+
+  if (!record) throw new Error('VERSION_NOT_FOUND');
+  if (record.published_at || record.state === 'ready' || record.state === 'cancelled') return;
+  if (!record.base_version_id) throw new Error('BASE_VERSION_REQUIRED');
+
+  const profile = profileSchema.parse(record.profile);
+  const aiConfig = profile.aiColumnConfig;
+  if (!aiConfig) throw new Error('AI_CONFIG_REQUIRED');
+
+  await withTenant(pool, task.tenantId, client =>
+    client.query("UPDATE dataset_versions SET state='importing',progress=0,error_code=NULL WHERE id=$1", [task.versionId])
+  );
+
+  const totalRows = await withTenant(pool, task.tenantId, async client => {
+    const res = await client.query<{ count: string }>(
+      'SELECT COUNT(*)::text AS count FROM dataset_rows WHERE version_id=$1',
+      [record.base_version_id]
+    );
+    return parseInt(res.rows[0]?.count ?? '0', 10);
+  });
+
+  if (totalRows === 0) {
+    await withTenant(pool, task.tenantId, client =>
+      client.query("UPDATE dataset_versions SET state='ready',progress=100,row_count=0 WHERE id=$1", [task.versionId])
+    );
+    return;
+  }
+
+  await withTenant(pool, task.tenantId, client =>
+    client.query('DELETE FROM dataset_rows WHERE version_id=$1', [task.versionId])
+  );
+
+  const batchSize = Math.max(10, Math.min(200, aiConfig.batchSize || 100));
+  let processed = 0;
+  let offset = 0;
+
+  while (offset < totalRows) {
+    await authorize();
+
+    const current = await withTenant(pool, task.tenantId, async client => {
+      const res = await client.query<{ state: string }>('SELECT state FROM dataset_versions WHERE id=$1', [task.versionId]);
+      return res.rows[0]?.state;
+    });
+    if (current === 'cancelled') throw new Error('IMPORT_CANCELLED');
+
+    const rows = await withTenant(pool, task.tenantId, async client => {
+      const res = await client.query<{
+        row_number: string;
+        values: Record<string, unknown>;
+        key_hash: string | null;
+        source_version_id: string;
+        source_row: string;
+        source_sheet: string;
+      }>(
+        'SELECT row_number, values, key_hash, source_version_id, source_row, source_sheet FROM dataset_rows WHERE version_id=$1 ORDER BY row_number ASC LIMIT $2 OFFSET $3',
+        [record.base_version_id, batchSize, offset]
+      );
+      return res.rows;
+    });
+
+    if (!rows.length) break;
+
+    const items = rows.map(r => {
+      const filteredData: Record<string, unknown> = {};
+      for (const col of aiConfig.sourceColumns) {
+        filteredData[col] = r.values[col] ?? null;
+      }
+      return {
+        rowNumber: Number(r.row_number),
+        data: filteredData,
+      };
+    });
+
+    const computedMap = await generateAiBatchValues({
+      prompt: aiConfig.prompt,
+      targetColumn: aiConfig.targetColumn,
+      targetType: aiConfig.targetType,
+      items,
+    });
+
+    await withTenant(pool, task.tenantId, async client => {
+      for (const r of rows) {
+        const rowNum = Number(r.row_number);
+        const computedVal = computedMap.get(rowNum) ?? null;
+        const newValues = { ...r.values, [aiConfig.targetColumn]: computedVal };
+
+        await client.query(
+          `INSERT INTO dataset_rows(tenant_id, version_id, row_number, values, key_hash, source_version_id, source_row, source_sheet)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [
+            task.tenantId,
+            task.versionId,
+            r.row_number,
+            JSON.stringify(newValues),
+            r.key_hash,
+            r.source_version_id,
+            r.source_row,
+            r.source_sheet,
+          ]
+        );
+      }
+
+      processed += rows.length;
+      const progress = Math.min(99, Math.floor((processed / totalRows) * 100));
+      await client.query(
+        'UPDATE dataset_versions SET progress=$2, row_count=$3 WHERE id=$1',
+        [task.versionId, progress, processed]
+      );
+    });
+
+    offset += rows.length;
+  }
+
+  await withTenant(pool, task.tenantId, client =>
+    client.query(
+      "UPDATE dataset_versions SET state='ready', progress=100, row_count=$2, error_code=NULL WHERE id=$1",
+      [task.versionId, processed]
+    )
+  );
+}
 
 /**
  * Desinfecta y desambigua los encabezados detectados en la primera fila de datos.
@@ -45,7 +196,7 @@ export function sanitizeHeaders(cells: Cell[]): string[] {
 }
 
 /**
- * Ejecuta el procesamiento de una tarea de ingesta (`profile` o `import`) en el worker de fondo.
+ * Ejecuta el procesamiento de una tarea de ingesta (`profile`, `import` o `ai_column`) en el worker de fondo.
  *
  * @param input Payload de la tarea con firma HMAC.
  */
@@ -59,6 +210,10 @@ export async function processImport(input: unknown) {
   };
   try {
     await authorize();
+    if (task.action === 'ai_column') {
+      await processAiColumn(task, pool, auth);
+      return;
+    }
     const record = await withTenant(pool, task.tenantId, async client => {
       const result = await client.query('SELECT object_key,object_version,bytes,format,regional,sha256,mapping,base_version_id,state,published_at FROM dataset_versions WHERE id=$1', [task.versionId]);
       return internalSchema.parse(result.rows[0]);

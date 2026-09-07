@@ -10,7 +10,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { Queue, type ConnectionOptions } from 'bullmq';
 import { z } from 'zod';
 export const queueName = process.env.INGESTION_QUEUE ?? 'atlas-ingestion-v1';
-export const taskSchema = z.object({ tenantId: z.uuid(), actorId: z.uuid(), versionId: z.uuid(), action: z.enum(['profile', 'import']), signature: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+export const taskSchema = z.object({ tenantId: z.uuid(), actorId: z.uuid(), versionId: z.uuid(), action: z.enum(['profile', 'import', 'ai_column']), signature: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 export type ImportTask = z.infer<typeof taskSchema>;
 
 /**

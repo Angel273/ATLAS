@@ -17,33 +17,32 @@ Este documento es el punto de entrada para continuar ATLAS. Las reglas obligator
   - Contexto doble en sesión `(atlas.tenant_id, atlas.account_id)` forzado en PostgreSQL para todas las tablas operacionales.
   - Certificación automatizada de 0 fugas de datos entre cuentas del mismo tenant.
 - Ingesta real desde `/app/accounts/:accountId/datasets`: CSV UTF-8 y XLSX; carga directa firmada a MinIO/S3; perfilado; validación regional; estrategias replace, append y upsert; inmutabilidad garantizada por triggers.
+- **Columna Asistida por IA en Datasets (`POST /api/v1/datasets/:id/ai-column`):** enriquecimiento por lotes con inferencia JSON estructurada (Gemini o Mock), filtrado automático de filas sin contenido (`hasMeaningfulData`), previsualización de 3 filas con muestreo inteligente (`previewAiColumn`), 4 plantillas de Call Center y generación inmutable de la versión `v{N+1}` (`base_version_id`).
 - Ciclo de Vida Dual de Datasets y KPIs (Hard Delete + Archivo/Deprecación Gobernados):
   - Borrado definitivo (Hard Delete): Para datasets y KPIs en estado borrador (sin versiones publicadas ni dependencias), con purga automática física de filas y versiones S3 (`storage.purge`).
   - Baja lógica y Deprecación (Soft Delete / Archivo): Para datasets y KPIs que contienen datos publicados, garantizando la inmutabilidad histórica requerida por ATLAS (`AGENTS.md` §3).
   - Triggers de PostgreSQL (`protect_published_dataset_delete`, `protect_published_version_delete`, `protect_published_kpi_delete`, `23514`).
 - Capa Semántica y Motor KPI en `/app/accounts/:accountId/kpis`: uniones multi-tabla gobernadas por grafo BFS determinista sin ciclos ni ambigüedades; DSL segura; targets operacionales, advertencias y críticos; cálculo con caché LRU acotada (500 entradas), rangos temporales y linaje auditado.
-- Lienzo Visual Interactivo tipo Lucidchart (`@xyflow/react`): vista dual interactiva/tabla, nodos de datasets y KPIs, aristas con enrutamiento horizontal inteligente y halo de contraste en primer plano, simulador determinista de rutas de consulta (BFS), constructor visual de fórmulas con autocompletado y auto-layout con Dagre.
+- Lienzo Visual Interactivo tipo Lucidchart (`@xyflow/react`): vista dual interactiva/tabla, deduplicación de nodos por dataset (`uniqueSources`) para prevenir claves duplicadas en ReactFlow/`<MiniMap>`, visualización de versiones activas y nuevas columnas calculadas por IA, aristas con enrutamiento horizontal inteligente y halo de contraste en primer plano, simulador determinista de rutas de consulta (BFS), constructor visual de fórmulas con autocompletado y auto-layout con Dagre.
 - Edición de KPIs con Versionado Inmutable: modificación de fórmulas y metas generando automáticamente la versión `v{number + 1}`, manteniendo vivas las versiones históricas.
 - Mapeo Dinámico de Workforce (`kpi_versions.workforce_mapping`): enlace declarativo entre datasets operativos y dimensiones de personal (Supervisor, Floor Manager, Wave, Team) sin alterar los datos importados.
 - Dashboards Gobernados en `/app/accounts/:accountId/dashboards`: cuadrícula responsive de 12 columnas con drag-and-drop (`GripVertical`), widgets interactivos ECharts, alternativas tabulares accesibles obligatorias (WCAG 2.2 AA), filtros temporales globales, filtros operacionales de call center (Supervisor, FM, Wave) con dropdowns dinámicos, edición efímera para no-administradores y publicación oficial inmutable.
 - Workforce, Catálogos Exclusivos y Rosters Semanales Versionados en `/app/accounts/:accountId/workforce`:
-  - **Catálogos de personal exclusivos por cuenta:** tipos de empleado, equipos y agentes pertenecen estrictamente a una cuenta (`account_id`), impidiendo mezclas indebidas entre operaciones.
-  - Semanas Operativas (`workforce_weeks`) formalizadas de Lunes a Domingo con código ISO (`YYYY-Www`).
-  - **Rosters Semanales Versionados e Inmutables (`workforce_roster_versions` y `workforce_roster_entries`):** congelación de snapshots de personal importado, publicación oficial de versión y clonación ágil hacia semanas futuras.
-  - Vista dedicada por semana (`/app/accounts/:accountId/workforce/weeks/:weekId`) con selector de versiones históricas e inspección de jerarquías.
-- Asistente Operacional de Inteligencia / AI Chat en `/app/accounts/:accountId/chat`: arquitectura multi-proveedor desacoplada (Google Gemini y Mock Determinista), tools 100% de solo lectura gobernadas, inyección estricta de tenant y cuenta activa desde la sesión, persistencia de linaje y evidencia (`grounding_context`), y límite estricto de 5 turnos por consulta.
+  - **Módulo en Pausa Gobernada:** Oculto temporalmente de la navegación general mientras se rediseña la arquitectura operativa. Rutas protegidas con pantalla informativa de estado en pausa.
+  - Catálogos de personal exclusivos por cuenta (`account_id`), semanas operativas ISO (`YYYY-Www`) y rosters semanales versionados inmutables (`workforce_roster_versions`).
+- Asistente Operacional de Inteligencia / AI Chat en `/app/accounts/:accountId/chat`: arquitectura multi-proveedor desacoplada (Google Gemini y Mock Determinista), herramientas 100% de solo lectura gobernadas, inyección estricta de tenant y cuenta activa desde la sesión, persistencia de linaje y evidencia (`grounding_context`), y **límite ampliado de 25 turnos por consulta**.
 - Navegación Unificada (`AppHeader`): integrada en `/portal/accounts` y en todas las rutas `/app/accounts/:accountId/...`, con indicador de cuenta activa, cambio rápido de operación y diálogo de perfil de usuario.
 
 ## Contratos y ubicación del código
 
 - Contratos HTTP/Zod: `packages/contracts/src/data.ts`, `kpi.ts`, `dashboard.ts`, `workforce.ts`, `ai.ts`, `auth.ts` e `index.ts`.
-- Ingesta y almacenamiento: `packages/ingestion/src/` (con soporte `storage.purge()`).
+- Ingesta, almacenamiento y motor de IA por lotes: `packages/ingestion/src/` (con `ai-column.ts`, `processor.ts`, `repository.ts` y `storage.purge()`).
 - Motor semántico y compilador de fórmulas: `packages/kpi/src/` (con caché LRU acotada).
-- Servicios API NestJS: `apps/api/src/dashboards/`, `apps/api/src/workforce/`, `apps/api/src/ai/`, `apps/api/src/identity/` y `apps/api/src/organizations/`.
+- Servicios API NestJS: `apps/api/src/dashboards/`, `apps/api/src/workforce/`, `apps/api/src/ai/` (con limitador a 25 turnos en `conversations.service.ts` y catalogación en `tools.ts`), `apps/api/src/identity/` y `apps/api/src/organizations/`.
 - Ingesta de Rosters Excel: `apps/api/src/workforce/excel-roster.ts`.
-- Lienzo visual semántico: `apps/web/components/semantic-canvas/`.
+- Lienzo visual semántico: `apps/web/components/semantic-canvas/` (con deduplicación de nodos `uniqueSources`).
 - Rutas HTTP y composición Nest: `apps/api/src/app.ts`.
-- Consumidor BullMQ: `apps/worker/src/main.ts`.
+- Consumidor BullMQ: `apps/worker/src/main.ts` (con tarea `ai_column`).
 - UI Web: `apps/web/app/portal/accounts/page.tsx`, `apps/web/app/app/accounts/[accountId]/layout.tsx`, `datasets/page.tsx`, `kpis/page.tsx`, `dashboards/page.tsx`, `workforce/page.tsx`, `workforce/weeks/[weekId]/page.tsx`, `chat/page.tsx`.
 - Esquema de base de datos: 20 migraciones `001_foundations.sql` a `020_account_permissions_and_grants.sql`.
 
@@ -57,8 +56,8 @@ Este documento es el punto de entrada para continuar ATLAS. Las reglas obligator
 
 ## Verificación disponible
 
-- Unitarias: 45 pruebas pasando (`vitest run`), cubriendo DSL, inferencia tipada, parseo de fórmulas, aislamiento de secretos, detección de ciclos en grafo semántico y contratos de workforce y AI.
-- Integración real: 54 pruebas pasando (`vitest run --config vitest.integration.config.ts`), cubriendo ingestión S3/BullMQ, RLS forzada entre organizaciones (Tenant A vs Tenant B), ciclo de vida dual (borrado definitivo de borradores, archivo de publicados, reactivación y bloqueos por triggers en PostgreSQL), compilación SQL multi-tabla, inmutabilidad de dashboards, versiones de KPI, linaje temporal de workforce, semanas operativas y bucle de tools de AI Chat.
+- Unitarias: 50 pruebas pasando (`vitest run`), cubriendo DSL, inferencia tipada, parseo de fórmulas, aislamiento de secretos, detección de ciclos en grafo semántico, contratos de workforce, AI, filtrado de datos nulos para IA (`hasMeaningfulData`) y lecturas de datasets.
+- Integración real: 64 pruebas pasando (`vitest run --config vitest.integration.config.ts`), cubriendo ingestión S3/BullMQ, RLS forzada entre organizaciones (Tenant A vs Tenant B), ciclo de vida dual (borrado definitivo de borradores, archivo de publicados, reactivación y bloqueos por triggers en PostgreSQL), compilación SQL multi-tabla, inmutabilidad de dashboards, versiones de KPI, columnas calculadas con IA y bucle de tools de AI Chat.
 - Aislamiento Composite RLS: Certificación automatizada en PostgreSQL de 0 fugas de datos entre cuentas distintas de la misma organización.
 - Tipos TypeScript y Turbo Build: 0 errores bajo configuración estricta en los 7 paquetes (`turbo run build`, 7 tareas exitosas en `@atlas/web`, `@atlas/api`, `@atlas/contracts`, `@atlas/ingestion`, `@atlas/kpi`, `@atlas/database`, `@atlas/worker`).
 - Compilación de producción: `next build` en `@atlas/web` completado exitosamente sin advertencias.
@@ -67,6 +66,28 @@ Los servicios locales esperados son web `127.0.0.1:3000`, API `127.0.0.1:4000`, 
 
 
 ## Changelog de entregas
+
+### 2026-09-07 — Columna Asistida por IA en Datasets, Deduplicación en Lienzo Semántico, Límite de 25 Turnos IA y Pausa Gobernada de Workforce
+
+- **Columna Asistida por IA en Datasets (AI-Calculated Columns):**
+  - Enriquecimiento por lotes de datasets existentes creando una versión inmutable `v{N+1}` (`base_version_id`).
+  - Motor BullMQ streaming (`processAiColumn`) con inferencia estructurada via Google Gemini o Mock Determinista.
+  - **Filtrado inteligente de filas vacías (`hasMeaningfulData`)**: Registros sin contexto en columnas seleccionadas se omiten de la IA y reciben `null`, optimizando costos de API y acelerando la ingesta.
+  - **Muestreo prioritario en `previewAiColumn`**: Prioriza casos con contenido real para las 3 filas de previsualización.
+  - Modal interactivo con 4 plantillas de Call Center (*Sentimiento*, *Categoría / Motivo*, *Urgencia*, *Cliente Insatisfecho*), saneamiento de slugs y barra de progreso en vivo durante el estado `importing`.
+- **Deduplicación Reactiva en Lienzo Semántico (KPI Definer):**
+  - Corrección del error de consola de claves duplicadas ReactFlow (`dataset-{sourceId}`) en `<MiniMap>`.
+  - Memoización de `uniqueSources` en `SemanticCanvas` manteniendo un solo nodo por dataset con la versión más reciente/activa (`v3` con 11 campos incluyendo la columna IA).
+  - Ordenamiento descendente en `loadSources` ([page.tsx](file:///c:/ATLAS/apps/web/app/app/kpis/page.tsx)) priorizando `dataset.currentVersionId`.
+  - Deduplicación de selectores en `RelationshipModal`, `QueryPathSimulator` y contador del toolbar (`Datasets (1)`).
+- **Aumento del Límite del Asistente IA (25 Turnos por Consulta):**
+  - Incrementado `maxTurns` de 5 a 25 en `ConversationsService` ([conversations.service.ts](file:///c:/ATLAS/apps/api/src/ai/conversations.service.ts)), permitiendo análisis semánticos profundos y múltiples ejecuciones de herramientas sin truncar el turno.
+- **Pausa Gobernada del Módulo de Workforce:**
+  - Feature flag `WORKFORCE_MODULE_ENABLED = false` en `apps/api/src/ai/tools.ts`.
+  - Exclusión de `get_employee_structure` del catálogo `TOOL_DEFINITIONS` para evitar desvíos del modelo analítico.
+  - Ocultamiento del botón *Workforce* en `AppHeader`.
+  - Pantallas de aviso amigable **"Módulo en Pausa / Rediseño"** en `/app/workforce` y vistas de semanas con redirecciones a Dashboards y Datasets.
+- **Verificación:** Monorepo compilado exitosamente, 50 pruebas unitarias pasando en verde (`vitest run`).
 
 ### 2026-09-06 — ATLAS v3: Account Portal, Composite RLS Isolation y Rosters Semanales Versionados
 

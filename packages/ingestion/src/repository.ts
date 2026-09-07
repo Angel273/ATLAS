@@ -8,9 +8,18 @@
 
 import { z } from 'zod';
 import { createPool, withTenant, withAccount, type Pool, type PoolClient } from '@atlas/database';
-import { actorSchema, DomainError, datasetCreateSchema, datasetListSchema, datasetSchema, versionSchema, versionListSchema, uploadCreateSchema, uploadResultSchema, mappingSchema, dataPreviewSchema, issueReportSchema, type DataActor, type DatasetVersion } from '@atlas/contracts';
+import {
+  actorSchema, DomainError, datasetCreateSchema, datasetListSchema, datasetSchema,
+  versionSchema, versionListSchema, uploadCreateSchema, uploadResultSchema, mappingSchema,
+  dataPreviewSchema, issueReportSchema,
+  aiColumnPreviewInputSchema, aiColumnPreviewResultSchema,
+  aiColumnCreateInputSchema, aiColumnCreateResultSchema,
+  type AiColumnPreviewResult, type AiColumnCreateResult,
+  type DataActor, type DatasetVersion, type Mapping, type Profile
+} from '@atlas/contracts';
 import { ObjectStorage } from './storage.js';
 import { ImportQueue } from './queue.js';
+import { generateAiBatchValues } from './ai-column.js';
 
 /**
  * Valida que el actor autenticado posea la capacidad (permiso RBAC) requerida para la acción.
@@ -365,6 +374,222 @@ export class IngestionService {
       await client.query('UPDATE datasets SET archived_at = NULL WHERE id = $1', [datasetId]);
       await audit(client, actor, 'dataset.unarchived', datasetId, correlation);
       return { action: 'unarchived' as const, id: datasetId };
+    });
+  }
+
+  async previewAiColumn(actor: DataActor, datasetId: string, body: unknown): Promise<AiColumnPreviewResult> {
+    permit(actor, 'dataset.read');
+    z.uuid().parse(datasetId);
+    const input = aiColumnPreviewInputSchema.parse(body);
+
+    return execute(this.pool, actor, async client => {
+      const datasetRes = await client.query<{ current_version_id: string | null }>(
+        'SELECT current_version_id FROM datasets WHERE id=$1',
+        [datasetId]
+      );
+      if (!datasetRes.rows[0]) throw new DomainError('DATASET_NOT_FOUND', 404, 'Dataset no encontrado.');
+
+      const versionId = input.baseVersionId ?? datasetRes.rows[0].current_version_id;
+      if (!versionId) throw new DomainError('NO_PUBLISHED_VERSION', 400, 'El dataset no tiene una versión disponible.');
+
+      const version = await findVersion(client, versionId);
+      if (!version.mapping) throw new DomainError('VERSION_NOT_READY', 400, 'La versión no tiene mapeo configurado.');
+
+      const mappedTargets = version.mapping.fields.map(f => f.target);
+      for (const col of input.sourceColumns) {
+        if (!mappedTargets.includes(col)) {
+          throw new DomainError('INVALID_SOURCE_COLUMN', 400, `La columna '${col}' no existe en el esquema del dataset.`);
+        }
+      }
+
+      // Priorizar filas donde al menos una de las columnas fuente tenga datos reales (no vacíos ni nulos)
+      const conditions = input.sourceColumns.map((col, idx) => 
+        `(values->>$${idx + 2} IS NOT NULL AND TRIM(values->>$${idx + 2}) NOT IN ('', 'null', 'undefined'))`
+      ).join(' OR ');
+
+      let rowsRes = await client.query<{
+        row_number: string;
+        values: Record<string, unknown>;
+      }>(
+        `SELECT row_number, values FROM dataset_rows 
+         WHERE version_id=$1 AND (${conditions}) 
+         ORDER BY row_number ASC LIMIT 3`,
+        [versionId, ...input.sourceColumns]
+      );
+
+      // Si todas las filas tienen las columnas fuente vacías, tomar las primeras 3 filas disponibles
+      if (!rowsRes.rows.length) {
+        rowsRes = await client.query<{
+          row_number: string;
+          values: Record<string, unknown>;
+        }>(
+          'SELECT row_number, values FROM dataset_rows WHERE version_id=$1 ORDER BY row_number ASC LIMIT 3',
+          [versionId]
+        );
+      }
+
+      if (!rowsRes.rows.length) {
+        return aiColumnPreviewResultSchema.parse({
+          targetColumn: input.targetColumn,
+          targetType: input.targetType,
+          sampleRows: [],
+        });
+      }
+
+      const items = rowsRes.rows.map(r => {
+        const filteredData: Record<string, unknown> = {};
+        for (const col of input.sourceColumns) {
+          filteredData[col] = r.values[col] ?? null;
+        }
+        return {
+          rowNumber: Number(r.row_number),
+          data: filteredData,
+        };
+      });
+
+      const computedMap = await generateAiBatchValues({
+        prompt: input.prompt,
+        targetColumn: input.targetColumn,
+        targetType: input.targetType,
+        items,
+      });
+
+      const sampleRows = items.map(item => ({
+        rowNumber: item.rowNumber,
+        inputs: item.data as Record<string, string | number | boolean | null>,
+        computedValue: computedMap.get(item.rowNumber) ?? null,
+      }));
+
+      return aiColumnPreviewResultSchema.parse({
+        targetColumn: input.targetColumn,
+        targetType: input.targetType,
+        sampleRows,
+      });
+    });
+  }
+
+  async createAiColumnVersion(actor: DataActor, datasetId: string, body: unknown, key: string | undefined, correlation: string): Promise<AiColumnCreateResult> {
+    permit(actor, 'dataset.manage');
+    if (!actor.accountId) throw new DomainError('ACCOUNT_REQUIRED', 400, 'Se requiere una cuenta activa.');
+    z.uuid().parse(datasetId);
+    const finalKey = key && z.uuid().safeParse(key).success ? key : crypto.randomUUID();
+    const input = aiColumnCreateInputSchema.parse(body);
+
+    const result = await execute(this.pool, actor, async client => {
+      const datasetRes = await client.query<{
+        account_id: string;
+        current_version_id: string | null;
+        archived_at: string | null;
+      }>(
+        'SELECT account_id, current_version_id, archived_at FROM datasets WHERE id=$1 FOR UPDATE',
+        [datasetId]
+      );
+      const dataset = datasetRes.rows[0];
+      if (!dataset) throw new DomainError('DATASET_NOT_FOUND', 404, 'Dataset no encontrado.');
+      if (dataset.archived_at) throw new DomainError('DATASET_ARCHIVED', 400, 'No se pueden añadir columnas a un dataset archivado.');
+
+      const baseVersionId = input.baseVersionId ?? dataset.current_version_id;
+      if (!baseVersionId) throw new DomainError('NO_BASE_VERSION', 400, 'El dataset debe tener una versión previa para derivar la columna.');
+
+      const baseVersion = await findVersion(client, baseVersionId);
+      if (!baseVersion.mapping) throw new DomainError('VERSION_NOT_READY', 400, 'La versión base no tiene mapeo configurado.');
+
+      if (baseVersion.mapping.fields.some(f => f.target === input.targetColumn)) {
+        throw new DomainError('COLUMN_ALREADY_EXISTS', 409, `La columna '${input.targetColumn}' ya existe en el dataset.`);
+      }
+
+      const mappedTargets = baseVersion.mapping.fields.map(f => f.target);
+      for (const col of input.sourceColumns) {
+        if (!mappedTargets.includes(col)) {
+          throw new DomainError('INVALID_SOURCE_COLUMN', 400, `La columna fuente '${col}' no existe en el esquema.`);
+        }
+      }
+
+      const existing = await client.query<{ id: string }>(
+        'SELECT id FROM dataset_versions WHERE dataset_id=$1 AND creation_key=$2',
+        [datasetId, finalKey]
+      );
+      if (existing.rows[0]) {
+        const version = await findVersion(client, existing.rows[0].id);
+        return { version };
+      }
+
+      const baseRawRes = await client.query<{ object_key: string; object_version: string | null }>(
+        'SELECT object_key, object_version FROM dataset_versions WHERE id=$1',
+        [baseVersion.id]
+      );
+      const baseRaw = baseRawRes.rows[0];
+
+      const id = crypto.randomUUID();
+      const newMapping: Mapping = {
+        ...baseVersion.mapping,
+        fields: [
+          ...baseVersion.mapping.fields,
+          {
+            source: input.targetColumn,
+            target: input.targetColumn,
+            type: input.targetType,
+            required: false,
+          },
+        ],
+      };
+
+      const newProfile: Profile = {
+        sheets: baseVersion.profile?.sheets ?? [],
+        aiColumnConfig: {
+          targetColumn: input.targetColumn,
+          targetType: input.targetType,
+          prompt: input.prompt,
+          sourceColumns: input.sourceColumns,
+          batchSize: input.batchSize,
+        },
+      };
+
+      await client.query(
+        `INSERT INTO dataset_versions(
+          id, tenant_id, account_id, dataset_id, number, actor_id, filename, bytes, format,
+          object_key, object_version, sha256, regional, profile, mapping, state, progress,
+          base_version_id, creation_key
+        ) VALUES (
+          $1, $2, $3, $4,
+          (SELECT COALESCE(MAX(number), 0) + 1 FROM dataset_versions WHERE dataset_id=$4),
+          $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'importing', 0, $15, $16
+        )`,
+        [
+          id,
+          actor.tenantId,
+          dataset.account_id,
+          datasetId,
+          actor.userId,
+          baseVersion.filename,
+          baseVersion.bytes,
+          'xlsx',
+          baseRaw?.object_key ?? `${actor.tenantId}/${datasetId}/${id}/original`,
+          baseRaw?.object_version ?? null,
+          baseVersion.sha256,
+          JSON.stringify(baseVersion.regional),
+          JSON.stringify(newProfile),
+          JSON.stringify(newMapping),
+          baseVersion.id,
+          finalKey,
+        ]
+      );
+
+      await audit(client, actor, 'dataset.ai_column_requested', id, correlation);
+      const version = await findVersion(client, id);
+      return { version };
+    });
+
+    await this.jobs.enqueue({
+      tenantId: actor.tenantId,
+      actorId: actor.userId,
+      versionId: result.version.id,
+      action: 'ai_column',
+    });
+
+    return aiColumnCreateResultSchema.parse({
+      datasetId,
+      version: result.version,
     });
   }
 }

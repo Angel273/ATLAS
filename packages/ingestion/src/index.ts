@@ -10,4 +10,5 @@ export * from './storage.js';
 export * from './queue.js';
 export * from './normalize.js';
 export * from './worker.js';
+export * from './ai-column.js';
 

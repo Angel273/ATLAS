@@ -98,15 +98,21 @@ export default function KpisPage() {
             id: dataset.id,
             name: dataset.name,
             slug: dataset.slug,
+            currentVersionId: dataset.currentVersionId,
             versions: (await api(`/datasets/${dataset.id}/versions`, versionListSchema)).items,
           }))
         );
         setSources(
-          items.flatMap(item =>
-            item.versions
-              .filter(version => version.publishedAt)
-              .map(version => ({ id: item.id, name: item.name, slug: item.slug, version }))
-          )
+          items.flatMap(item => {
+            const published = item.versions
+              .filter(version => Boolean(version.publishedAt))
+              .sort((a, b) => {
+                if (a.id === item.currentVersionId) return -1;
+                if (b.id === item.currentVersionId) return 1;
+                return b.number - a.number;
+              });
+            return published.map(version => ({ id: item.id, name: item.name, slug: item.slug, version }));
+          })
         );
       } catch {
         // Ignored if datasets fail to load

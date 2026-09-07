@@ -123,10 +123,22 @@ function InnerSemanticCanvas({
     setTimeout(() => setToastMessage(null), 4000);
   }, []);
 
+  // Deduplicate sources by dataset ID, keeping the latest/active version
+  const uniqueSources = useMemo(() => {
+    const map = new Map<string, (typeof sources)[0]>();
+    for (const source of sources) {
+      const existing = map.get(source.id);
+      if (!existing || source.version.number > existing.version.number) {
+        map.set(source.id, source);
+      }
+    }
+    return Array.from(map.values());
+  }, [sources]);
+
   // Build initial Nodes and Edges from sources, relationships, and kpis
   const generateGraph = useCallback(() => {
-    // 1. Build Dataset Nodes
-    const datasetNodes: Node[] = sources.map((source, index) => {
+    // 1. Build Dataset Nodes (one node per unique dataset)
+    const datasetNodes: Node[] = uniqueSources.map((source, index) => {
       const mappingFields = source.version.mapping?.fields || [];
       const keyFields = source.version.mapping?.keyFields || [];
 
@@ -321,7 +333,7 @@ function InnerSemanticCanvas({
     const allEdges = [...semanticEdges, ...dependencyEdges];
 
     return { allNodes, allEdges };
-  }, [sources, relationships, kpis, simulatedPath, edgesOnTop]);
+  }, [uniqueSources, sources, relationships, kpis, simulatedPath, edgesOnTop]);
 
   // Sync state initially or on update
   useEffect(() => {
@@ -582,7 +594,7 @@ function InnerSemanticCanvas({
         onExportJson={handleExportJson}
         onImportJson={handleImportJson}
         canManage={canManage}
-        totalDatasets={sources.length}
+        totalDatasets={uniqueSources.length}
         totalKpis={kpis.length}
         totalRelationships={relationships.length}
         edgesOnTop={edgesOnTop}
@@ -644,7 +656,7 @@ function InnerSemanticCanvas({
           setEditingRelData(null);
         }}
         data={editingRelData}
-        sources={sources}
+        sources={uniqueSources}
         onSave={async (payload) => {
           await onSaveRelationship(payload);
           await onRefresh();
@@ -678,7 +690,7 @@ function InnerSemanticCanvas({
           setIsSimulatorOpen(false);
           setSimulatedPath(null);
         }}
-        sources={sources}
+        sources={uniqueSources}
         relationships={relationships}
         onHighlightPath={(path) => {
           setSimulatedPath(path);

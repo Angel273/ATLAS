@@ -53,6 +53,61 @@ export default function WeekDetailPage({ params }: WeekDetailPageProps) {
   const router = useRouter();
 
   const [session, setSession] = useState<Session | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const user = await api('/auth/session', sessionSchema);
+        setSession(user);
+      } catch {
+        // Handled
+      }
+    })();
+  }, []);
+
+  const WORKFORCE_MODULE_PAUSED = true;
+  if (WORKFORCE_MODULE_PAUSED) {
+    return (
+      <div className="layout">
+        <AppHeader session={session} accountId={accountId} />
+        <main className="content" style={{ maxWidth: 720, margin: '60px auto', textAlign: 'center' }}>
+          <div className="panel data-card" style={{ padding: '48px 32px' }}>
+            <div
+              style={{
+                width: 56,
+                height: 56,
+                borderRadius: '50%',
+                background: 'rgba(217, 83, 30, 0.12)',
+                color: '#D9531E',
+                display: 'grid',
+                placeItems: 'center',
+                margin: '0 auto 20px auto',
+              }}
+            >
+              <Users size={28} />
+            </div>
+            <span className="badge" style={{ marginBottom: 12, display: 'inline-block' }}>
+              Módulo en Pausa / Rediseño
+            </span>
+            <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 12, color: 'var(--ink)' }}>
+              Módulo de Workforce
+            </h1>
+            <p className="secondary" style={{ fontSize: 15, lineHeight: 1.6, maxWidth: 520, margin: '0 auto 28px auto' }}>
+              El módulo de Workforce (Gestión de Personal, Jerarquías y Rosters Semanales) se encuentra temporalmente desactivado mientras se replantea y optimiza su arquitectura operacional.
+            </p>
+            <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+              <Link href={`/app/accounts/${accountId}/dashboards`} className="button primary">
+                Ir a Dashboards
+              </Link>
+              <Link href={`/app/accounts/${accountId}/datasets`} className="button">
+                Ir a Datasets
+              </Link>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
   const [week, setWeek] = useState<WorkforceWeek | null>(null);
   const [allWeeks, setAllWeeks] = useState<WorkforceWeek[]>([]);
   const [versions, setVersions] = useState<RosterVersion[]>([]);

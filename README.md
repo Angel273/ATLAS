@@ -54,7 +54,7 @@ Implementación del monorepo modular descrito en `design.md` e `implementation.m
   - Arquitectura multi-proveedor desacoplada (`AIProvider`): Google Gemini en producción y Mock Determinista offline para pruebas y entornos locales sin API keys.
   - 7 herramientas estrictamente de solo lectura (`search_kpis`, `get_kpi_definition`, `describe_dataset`, `describe_relationships`, `run_semantic_query`, `get_employee_structure`, `get_published_dashboard`).
   - Inyección obligatoria de `tenant_id` y `account_id` directamente desde la sesión del usuario, garantizando aislamiento total.
-  - Respuestas con separación de hechos e interpretación, citas auditables con linaje (`grounding_context`) y límite duro de 5 turnos por interacción.
+  - Respuestas con separación de hechos e interpretación, citas auditables con linaje (`grounding_context`) y **límite ampliado de 25 turnos por consulta**.
 
 ## Arquitectura y Stack
 

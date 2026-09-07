@@ -19,10 +19,16 @@ import type { z } from 'zod';
 export async function api<T>(path: string, schema: z.ZodType<T>, init?: RequestInit): Promise<T> {
 
   const response = await fetch(`/api/v1${path}`, { ...init, credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json', ...init?.headers } });
-  const value: unknown = await response.json();
+  const text = await response.text();
+  let value: unknown;
+  try {
+    value = text ? JSON.parse(text) : null;
+  } catch {
+    value = null;
+  }
   if (!response.ok) {
-    const parsed = errorResponseSchema.safeParse(value);
-    throw new Error(parsed.success ? `${parsed.data.message} (Ref. ${parsed.data.correlationId.slice(0, 8)})` : 'El servicio no está disponible. Inténtalo de nuevo.');
+    const parsed = value ? errorResponseSchema.safeParse(value) : null;
+    throw new Error(parsed?.success ? `${parsed.data.message} (Ref. ${parsed.data.correlationId.slice(0, 8)})` : 'El servicio no está disponible temporalmente. Inténtalo de nuevo.');
   }
   return schema.parse(value);
 }
