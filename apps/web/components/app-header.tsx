@@ -82,15 +82,15 @@ export function AppHeader({ session, accountId: propAccountId, onLogout }: AppHe
           aria-label="Navegación del espacio de trabajo"
           style={{ display: 'flex', gap: '8px', alignItems: 'center' }}
         >
-          {/* Portal de Cuentas */}
+          {/* Portal de Cuentas / CRUD */}
           <Link
             href="/portal/accounts"
             className={`button ${pathname.startsWith('/portal') ? 'primary' : ''}`}
             style={{ height: '32px', fontSize: '13px', padding: '0 10px', gap: '6px' }}
-            title="Ir al Portal de Cuentas"
+            title="Administrar y seleccionar cuentas operacionales"
           >
             <Building2 size={14} />
-            <span>Portal</span>
+            <span>Cuentas</span>
           </Link>
 
           {activeAccountId && (

@@ -14,8 +14,11 @@ import {
   accountListSchema,
   accountSchema,
   deleteAccountResultSchema,
+  memberListSchema,
+  accountMembersSchema,
   type Session,
   type Account,
+  type Member,
 } from '@atlas/contracts';
 import {
   Briefcase,
@@ -40,6 +43,8 @@ import {
   UserCheck,
   Sparkles,
   SlidersHorizontal,
+  Copy,
+  Check,
 } from 'lucide-react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Brand } from '../../../components/workspace';
@@ -67,6 +72,14 @@ export default function AccountPortalPage() {
   const [deletingAccount, setDeletingAccount] = useState<Account | null>(null);
   const [memberAssignAccount, setMemberAssignAccount] = useState<Account | null>(null);
 
+  // Member assignment state
+  const [orgMembers, setOrgMembers] = useState<Member[]>([]);
+  const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
+  const [loadingMembers, setLoadingMembers] = useState(false);
+  const [savingMembers, setSavingMembers] = useState(false);
+  const [memberError, setMemberError] = useState('');
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
   // Form states
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
@@ -77,12 +90,18 @@ export default function AccountPortalPage() {
     try {
       setLoading(true);
       setError('');
-      const [sessionData, accountsData] = await Promise.all([
+      const [sessionRes, accountsRes] = await Promise.allSettled([
         api('/auth/session', sessionSchema),
         api('/accounts?includeArchived=true', accountListSchema),
       ]);
-      setSession(sessionData);
-      setAccounts(accountsData.items);
+      if (sessionRes.status === 'fulfilled') {
+        setSession(sessionRes.value);
+      }
+      if (accountsRes.status === 'fulfilled') {
+        setAccounts(accountsRes.value.items);
+      } else {
+        setError(accountsRes.reason instanceof Error ? accountsRes.reason.message : 'Error al cargar cuentas operativas.');
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error al conectar con ATLAS.');
     } finally {
@@ -212,6 +231,60 @@ export default function AccountPortalPage() {
       setError(err instanceof Error ? err.message : 'Error al reactivar la cuenta.');
     } finally {
       setSaving(false);
+    }
+  }
+
+  // Open Member Assignment Dialog
+  async function handleOpenMemberAssign(account: Account) {
+    setMemberAssignAccount(account);
+    setMemberError('');
+    setLoadingMembers(true);
+    try {
+      const [membersRes, accountMembersRes] = await Promise.all([
+        api('/users', memberListSchema),
+        api(`/accounts/${account.id}/members`, accountMembersSchema),
+      ]);
+      setOrgMembers(membersRes.items);
+      setSelectedMemberIds(accountMembersRes.membershipIds);
+    } catch (err) {
+      setMemberError(err instanceof Error ? err.message : 'Error al cargar miembros de la organización.');
+    } finally {
+      setLoadingMembers(false);
+    }
+  }
+
+  // Save Member Assignment
+  async function handleSaveMemberAssign() {
+    if (!memberAssignAccount) return;
+    setSavingMembers(true);
+    setMemberError('');
+    try {
+      await fetch(`/api/v1/accounts/${memberAssignAccount.id}/members`, {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ memberIds: selectedMemberIds }),
+      });
+      setAccounts(prev =>
+        prev.map(a => (a.id === memberAssignAccount.id ? { ...a, memberCount: selectedMemberIds.length } : a))
+      );
+      setNotice(`Accesos actualizados exitosamente para "${memberAssignAccount.name}".`);
+      setMemberAssignAccount(null);
+    } catch (err) {
+      setMemberError(err instanceof Error ? err.message : 'Error al guardar asignaciones de miembros.');
+    } finally {
+      setSavingMembers(false);
+    }
+  }
+
+  // Copy Account ID
+  async function handleCopyAccountId(id: string) {
+    try {
+      await navigator.clipboard.writeText(id);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 2000);
+    } catch {
+      // Ignorar fallback
     }
   }
 
@@ -518,9 +591,16 @@ export default function AccountPortalPage() {
                             {acc.timezone}
                           </span>
                           <span>•</span>
-                          <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: '11px' }}>
-                            ID: {acc.id.slice(0, 8)}
-                          </span>
+                          <button
+                            type="button"
+                            onClick={() => { void handleCopyAccountId(acc.id); }}
+                            className="text-button"
+                            style={{ fontFamily: 'ui-monospace, monospace', fontSize: '11px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                            title="Haz clic para copiar el UUID de la cuenta"
+                          >
+                            <span>ID: {acc.id.slice(0, 8)}</span>
+                            {copiedId === acc.id ? <Check size={11} style={{ color: 'var(--positive)' }} /> : <Copy size={11} />}
+                          </button>
                         </div>
 
                         {/* Operational Status Chips */}
@@ -568,26 +648,30 @@ export default function AccountPortalPage() {
                         {/* Metrics summary */}
                         <div
                           style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(4, 1fr)',
+                            gap: '6px',
                             borderTop: '1px solid var(--border)',
                             paddingTop: '12px',
                             marginTop: '12px',
-                            fontSize: '12px',
+                            fontSize: '11px',
                           }}
                         >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }} title="Datasets">
-                            <Database size={13} style={{ color: 'var(--secondary)' }} />
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }} title="Datasets">
+                            <Database size={12} style={{ color: 'var(--secondary)' }} />
                             <span><strong>{acc.datasetCount ?? 0}</strong> Datasets</span>
                           </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }} title="KPIs definidos">
-                            <GitBranch size={13} style={{ color: 'var(--secondary)' }} />
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }} title="KPIs definidos">
+                            <GitBranch size={12} style={{ color: 'var(--secondary)' }} />
                             <span><strong>{acc.kpiCount ?? 0}</strong> KPIs</span>
                           </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }} title="Dashboards">
-                            <LayoutDashboard size={13} style={{ color: 'var(--secondary)' }} />
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }} title="Dashboards">
+                            <LayoutDashboard size={12} style={{ color: 'var(--secondary)' }} />
                             <span><strong>{acc.dashboardCount ?? 0}</strong> Vistas</span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }} title="Miembros asignados">
+                            <Users size={12} style={{ color: 'var(--secondary)' }} />
+                            <span><strong>{acc.memberCount ?? 0}</strong> Miembros</span>
                           </div>
                         </div>
                       </div>
@@ -658,6 +742,21 @@ export default function AccountPortalPage() {
                             >
                               <Pencil size={11} />
                               <span>Editar</span>
+                            </button>
+
+                            <span style={{ color: 'var(--border-strong)' }}>|</span>
+
+                            <button
+                              type="button"
+                              className="text-button"
+                              onClick={() => {
+                                void handleOpenMemberAssign(acc);
+                              }}
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}
+                              title="Gestionar qué miembros pueden operar esta cuenta"
+                            >
+                              <UserCheck size={11} />
+                              <span>Accesos</span>
                             </button>
 
                             <span style={{ color: 'var(--border-strong)' }}>|</span>
@@ -930,6 +1029,124 @@ export default function AccountPortalPage() {
             </div>
 
             {session && <MembersPanel currentUserId={session.userId} />}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      {/* Dialog: Asignar Miembros a la Cuenta */}
+      <Dialog.Root open={memberAssignAccount !== null} onOpenChange={open => { if (!open && !savingMembers) setMemberAssignAccount(null); }}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="dialog-overlay" />
+          <Dialog.Content className="dialog-content" style={{ maxWidth: '520px', padding: '24px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
+              <div>
+                <Dialog.Title className="dialog-title" style={{ fontSize: '18px', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <UserCheck size={18} style={{ color: 'var(--accent)' }} />
+                  <span>Accesos a {memberAssignAccount?.name}</span>
+                </Dialog.Title>
+                <Dialog.Description className="secondary" style={{ fontSize: '12px', marginTop: '4px' }}>
+                  Selecciona los supervisores, analistas o managers de la organización que tendrán acceso a los datos y vistas de esta cuenta.
+                </Dialog.Description>
+              </div>
+              <Dialog.Close className="icon-button dialog-close" aria-label="Cerrar" disabled={savingMembers}>
+                <X />
+              </Dialog.Close>
+            </div>
+
+            <div
+              style={{
+                background: 'var(--surface-muted)',
+                padding: '10px 12px',
+                borderRadius: '4px',
+                fontSize: '12px',
+                color: 'var(--secondary)',
+                marginBottom: '16px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+              }}
+            >
+              <ShieldCheck size={16} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+              <span>
+                Los administradores de la organización tienen acceso global automático a todas las cuentas operacionales.
+              </span>
+            </div>
+
+            {loadingMembers ? (
+              <div style={{ textAlign: 'center', padding: '30px 0' }}>
+                <p className="secondary">Cargando directorio de miembros…</p>
+              </div>
+            ) : (
+              <div style={{ maxHeight: '320px', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: '4px', padding: '8px 12px' }}>
+                {orgMembers.filter(m => m.role !== 'admin').length === 0 ? (
+                  <p className="secondary" style={{ fontSize: '12px', textAlign: 'center', padding: '20px 0' }}>
+                    No hay miembros operativos adicionales en la organización. Invita supervisores o agentes desde el panel de Usuarios.
+                  </p>
+                ) : (
+                  orgMembers
+                    .filter(m => m.role !== 'admin')
+                    .map(m => {
+                      const isSelected = selectedMemberIds.includes(m.id);
+                      return (
+                        <label
+                          key={m.id}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            padding: '8px 6px',
+                            borderBottom: '1px solid var(--border-subtle)',
+                            cursor: 'pointer',
+                            fontSize: '13px',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={e => {
+                                if (e.target.checked) {
+                                  setSelectedMemberIds(prev => [...prev, m.id]);
+                                } else {
+                                  setSelectedMemberIds(prev => prev.filter(id => id !== m.id));
+                                }
+                              }}
+                            />
+                            <div>
+                              <div style={{ fontWeight: 500 }}>{m.name || m.email}</div>
+                              <div style={{ fontSize: '11px', color: 'var(--secondary)' }}>{m.email}</div>
+                            </div>
+                          </div>
+                          <span className="badge" style={{ fontSize: '10px', textTransform: 'capitalize' }}>
+                            {m.role}
+                          </span>
+                        </label>
+                      );
+                    })
+                )}
+              </div>
+            )}
+
+            {memberError && <p className="form-error" role="alert" style={{ marginTop: '12px' }}>{memberError}</p>}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '18px' }}>
+              <button
+                type="button"
+                className="button"
+                onClick={() => setMemberAssignAccount(null)}
+                disabled={savingMembers}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="button primary"
+                onClick={() => { void handleSaveMemberAssign(); }}
+                disabled={savingMembers || loadingMembers}
+              >
+                {savingMembers ? 'Guardando…' : 'Guardar Accesos'}
+              </button>
+            </div>
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>

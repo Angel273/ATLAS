@@ -45,7 +45,7 @@ Este documento es el punto de entrada para continuar ATLAS. Las reglas obligator
 - Rutas HTTP y composición Nest: `apps/api/src/app.ts`.
 - Consumidor BullMQ: `apps/worker/src/main.ts`.
 - UI Web: `apps/web/app/portal/accounts/page.tsx`, `apps/web/app/app/accounts/[accountId]/layout.tsx`, `datasets/page.tsx`, `kpis/page.tsx`, `dashboards/page.tsx`, `workforce/page.tsx`, `workforce/weeks/[weekId]/page.tsx`, `chat/page.tsx`.
-- Esquema de base de datos: 19 migraciones `001_foundations.sql` a `019_employee_relationships_account.sql`.
+- Esquema de base de datos: 20 migraciones `001_foundations.sql` a `020_account_permissions_and_grants.sql`.
 
 ## Pendiente inmediato (Fase 6 — Hardening y piloto)
 

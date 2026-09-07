@@ -15,7 +15,7 @@ El documento canónico y detallado del estado de implementación se encuentra en
   - **Capa Semántica y Lienzo Interactivo (`@xyflow/react`):** Grafo BFS sin ciclos ni ambigüedades, constructor visual de fórmulas y caché LRU acotada (500 entradas).
   - **Dashboards Gobernados de 12 Columnas:** Alternativas WCAG 2.2 AA, widgets ECharts interactivos, filtros de call center dinámicos y publicación inmutable.
   - **AI Chat Multi-Proveedor:** Asistente de solo lectura con 7 tools acotadas por tenant y cuenta activa, evidencia y linaje auditable.
-- **Esquema de Base de Datos:** 19 migraciones SQL canónicas (`001_foundations.sql` a `019_employee_relationships_account.sql`).
+- **Esquema de Base de Datos:** 20 migraciones SQL canónicas (`001_foundations.sql` a `020_account_permissions_and_grants.sql`).
 - **Validación Automatizada:**
   - 45 pruebas unitarias pasando (`pnpm test`).
   - 54 pruebas de integración real con PostgreSQL y RLS forzada (`pnpm test:integration`).

@@ -34,6 +34,7 @@ export class OrganizationsService {
                   COALESCE((SELECT count(*)::int FROM datasets d WHERE d.tenant_id = a.tenant_id AND d.account_id = a.id AND d.archived_at IS NULL), 0) AS "datasetCount",
                   COALESCE((SELECT count(DISTINCT slug)::int FROM kpi_versions k WHERE k.tenant_id = a.tenant_id AND k.account_id = a.id AND k.deprecated_at IS NULL), 0) AS "kpiCount",
                   COALESCE((SELECT count(*)::int FROM dashboards b WHERE b.tenant_id = a.tenant_id AND b.account_id = a.id), 0) AS "dashboardCount",
+                  COALESCE((SELECT count(*)::int FROM identity.membership_account_access maa WHERE maa.tenant_id = a.tenant_id AND maa.account_id = a.id), 0) AS "memberCount",
                   (SELECT week_code FROM workforce_weeks w WHERE w.tenant_id = a.tenant_id AND w.account_id = a.id AND w.status = 'current' LIMIT 1) AS "activeWeekCode",
                   (SELECT status FROM workforce_roster_versions r WHERE r.tenant_id = a.tenant_id AND r.account_id = a.id ORDER BY r.created_at DESC LIMIT 1) AS "rosterStatus"
            FROM accounts a
@@ -44,6 +45,7 @@ export class OrganizationsService {
                   COALESCE((SELECT count(*)::int FROM datasets d WHERE d.tenant_id = a.tenant_id AND d.account_id = a.id AND d.archived_at IS NULL), 0) AS "datasetCount",
                   COALESCE((SELECT count(DISTINCT slug)::int FROM kpi_versions k WHERE k.tenant_id = a.tenant_id AND k.account_id = a.id AND k.deprecated_at IS NULL), 0) AS "kpiCount",
                   COALESCE((SELECT count(*)::int FROM dashboards b WHERE b.tenant_id = a.tenant_id AND b.account_id = a.id), 0) AS "dashboardCount",
+                  COALESCE((SELECT count(*)::int FROM identity.membership_account_access maa WHERE maa.tenant_id = a.tenant_id AND maa.account_id = a.id), 0) AS "memberCount",
                   (SELECT week_code FROM workforce_weeks w WHERE w.tenant_id = a.tenant_id AND w.account_id = a.id AND w.status = 'current' LIMIT 1) AS "activeWeekCode",
                   (SELECT status FROM workforce_roster_versions r WHERE r.tenant_id = a.tenant_id AND r.account_id = a.id ORDER BY r.created_at DESC LIMIT 1) AS "rosterStatus"
            FROM accounts a

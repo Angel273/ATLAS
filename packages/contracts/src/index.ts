@@ -150,10 +150,16 @@ export const accountSchema = z.object({
   datasetCount: z.number().int().optional().default(0),
   kpiCount: z.number().int().optional().default(0),
   dashboardCount: z.number().int().optional().default(0),
+  memberCount: z.number().int().optional().default(0),
   rosterStatus: z.string().nullable().optional(),
 }).strict();
 export type Account = z.infer<typeof accountSchema>;
 export const accountListSchema = z.object({ items: z.array(accountSchema) }).strict();
+
+export const accountMembersSchema = z.object({
+  membershipIds: z.array(z.uuid()),
+}).strict();
+export type AccountMembers = z.infer<typeof accountMembersSchema>;
 export const createAccountSchema = z.object({
   name: z.string().trim().min(2).max(120),
   timezone: z.string().min(1).max(80).refine(value => {

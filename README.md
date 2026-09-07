@@ -150,7 +150,7 @@ npx pnpm audit --prod
 - **Pruebas de integración real:** 54 pruebas pasando con PostgreSQL y RLS forzada (ingesta S3/BullMQ, ciclo dual de borrado y archivo, triggers PostgreSQL, compilación SQL multi-tabla, RLS cruzada entre organizaciones, linaje temporal de workforce y bucle de tools de AI Chat).
 - **Aislamiento Composite RLS:** Certificación automatizada de 0 fugas de datos de personal, equipos, semanas y rosters entre cuentas de un mismo tenant.
 - **Tipado estricto:** 0 errores en verificación de tipos Turborepo y `next build` en los 7 paquetes.
-- **Migraciones canónicas:** 19 migraciones SQL aplicadas en base de datos (`001_foundations.sql` a `019_employee_relationships_account.sql`).
+- **Migraciones canónicas:** 20 migraciones SQL aplicadas en base de datos (`001_foundations.sql` a `020_account_permissions_and_grants.sql`).
 
 ## Estado de implementación
 
