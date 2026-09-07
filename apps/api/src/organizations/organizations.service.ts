@@ -136,8 +136,32 @@ export class OrganizationsService {
       );
       if (!target.rows[0]) throw new AppError('ACCOUNT_NOT_FOUND', 404, 'Cuenta no encontrada.');
 
+      // Verificar deterministamente si la cuenta posee recursos o datos asociados que requieran preservación histórica
+      const guardCheck = await client.query<{ hasData: boolean }>(`
+        SELECT (
+          EXISTS (SELECT 1 FROM datasets WHERE account_id = $1 AND tenant_id = $2) OR
+          EXISTS (SELECT 1 FROM kpi_versions WHERE account_id = $1 AND tenant_id = $2) OR
+          EXISTS (SELECT 1 FROM dashboards WHERE account_id = $1 AND tenant_id = $2) OR
+          EXISTS (SELECT 1 FROM workforce_weeks WHERE account_id = $1 AND tenant_id = $2) OR
+          EXISTS (SELECT 1 FROM employees WHERE account_id = $1 AND tenant_id = $2)
+        ) AS "hasData"
+      `, [id, principal.tenantId]);
+
+      if (guardCheck.rows[0]?.hasData) {
+        // La cuenta posee datos asociados: procedemos directamente al archivo lógico sin provocar error 23514
+        await client.query('UPDATE accounts SET archived_at = now() WHERE id = $1 AND tenant_id = $2', [id, principal.tenantId]);
+        await client.query(
+          'INSERT INTO audit_events(tenant_id, actor_id, event, correlation_id, target_id) VALUES ($1, $2, $3, $4, $5)',
+          [principal.tenantId, principal.userId, 'account.archived', correlationId, id]
+        );
+        return deleteAccountResultSchema.parse({ archived: true });
+      }
+
+      // La cuenta no posee datos: borrado físico definitivo protegido mediante SAVEPOINT
+      await client.query('SAVEPOINT account_delete_attempt');
       try {
         await client.query('DELETE FROM accounts WHERE id = $1 AND tenant_id = $2', [id, principal.tenantId]);
+        await client.query('RELEASE SAVEPOINT account_delete_attempt');
         await client.query(
           'INSERT INTO audit_events(tenant_id, actor_id, event, correlation_id, target_id) VALUES ($1, $2, $3, $4, $5)',
           [principal.tenantId, principal.userId, 'account.deleted', correlationId, id]
@@ -145,7 +169,7 @@ export class OrganizationsService {
         return deleteAccountResultSchema.parse({ deleted: true });
       } catch (error) {
         if (error && typeof error === 'object' && 'code' in error && error.code === '23514') {
-          // El trigger de base de datos impidió el borrado físico por existir datos asociados: archivamos lógicamente
+          await client.query('ROLLBACK TO SAVEPOINT account_delete_attempt');
           await client.query('UPDATE accounts SET archived_at = now() WHERE id = $1 AND tenant_id = $2', [id, principal.tenantId]);
           await client.query(
             'INSERT INTO audit_events(tenant_id, actor_id, event, correlation_id, target_id) VALUES ($1, $2, $3, $4, $5)',
